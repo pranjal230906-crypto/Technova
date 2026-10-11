@@ -1,8 +1,59 @@
-import { useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import type { User } from "@supabase/supabase-js"
+import {
+  clearSupabaseCredentials,
+  DEFAULT_ACCOUNTS,
+  DEFAULT_APPROVALS,
+  DEFAULT_AUDIT_LOGS,
+  DEFAULT_EVIDENCE,
+  DEFAULT_INTEGRATIONS,
+  DEFAULT_INTERACTIONS,
+  DEFAULT_RISKS_OPPORTUNITIES,
+  DEFAULT_SETTINGS,
+  getSupabaseClient,
+  getSupabaseConfig,
+  saveSupabaseCredentials,
+  type AccountRecord,
+  type ApprovalRecord,
+  type AuditLogRecord,
+  type BadgeTone,
+  type EvidenceRecord,
+  type IntegrationRecord,
+  type InteractionRecord,
+  type RiskOpportunityRecord,
+  type WorkspaceSettingsRecord,
+} from "./lib/supabase"
 
-type Page = "overview" | "accounts" | "account" | "risks" | "approvals" | "audit" | "integrations" | "settings"
+type Page =
+  | "overview"
+  | "accounts"
+  | "account"
+  | "risks"
+  | "approvals"
+  | "audit"
+  | "integrations"
+  | "settings"
 
-type IconName = "grid" | "users" | "alert" | "spark" | "check" | "history" | "plug" | "settings" | "search" | "bell" | "arrow" | "calendar" | "activity" | "message" | "file" | "shield" | "mail" | "edit" | "close"
+type IconName =
+  | "grid"
+  | "users"
+  | "alert"
+  | "spark"
+  | "check"
+  | "history"
+  | "plug"
+  | "settings"
+  | "search"
+  | "bell"
+  | "arrow"
+  | "calendar"
+  | "activity"
+  | "message"
+  | "file"
+  | "shield"
+  | "mail"
+  | "edit"
+  | "close"
 
 function Icon({
   name,
@@ -130,7 +181,7 @@ function Badge({
   tone = "neutral",
 }: {
   children: React.ReactNode
-  tone?: "red" | "green" | "blue" | "amber" | "neutral"
+  tone?: BadgeTone
 }) {
   const tones = {
     red: "bg-red-50 text-red-700 ring-red-200",
@@ -199,7 +250,7 @@ function Card({
   )
 }
 
-const navItems: { id: Page label: string icon: IconName }[] = [
+const navItems: { id: Page; label: string; icon: IconName }[] = [
   { id: "overview", label: "Overview", icon: "grid" },
   { id: "accounts", label: "Customer Accounts", icon: "users" },
   { id: "risks", label: "Risk & Opportunities", icon: "alert" },
@@ -209,55 +260,14 @@ const navItems: { id: Page label: string icon: IconName }[] = [
   { id: "settings", label: "Settings", icon: "settings" },
 ]
 
-const accounts = [
-  {
-    name: "Acme Corporation",
-    initials: "AC",
-    status: "At Risk",
-    tone: "red" as const,
-    signal: "Usage declined 28% this month",
-    renewal: "May 28, 2025",
-    action: "Create follow-up task",
-    color: "bg-indigo-100 text-indigo-700",
-  },
-  {
-    name: "NovaTech",
-    initials: "NT",
-    status: "Expansion Opportunity",
-    tone: "blue" as const,
-    signal: "Team adoption up 34%",
-    renewal: "Aug 12, 2025",
-    action: "Schedule expansion review",
-    color: "bg-cyan-100 text-cyan-700",
-  },
-  {
-    name: "BrightPath",
-    initials: "BP",
-    status: "Healthy",
-    tone: "green" as const,
-    signal: "Strong weekly engagement",
-    renewal: "Oct 03, 2025",
-    action: "Maintain success plan",
-    color: "bg-emerald-100 text-emerald-700",
-  },
-  {
-    name: "CloudSync",
-    initials: "CS",
-    status: "Pending Approval",
-    tone: "amber" as const,
-    signal: "Champion changed roles",
-    renewal: "Jun 17, 2025",
-    action: "Draft stakeholder email",
-    color: "bg-amber-100 text-amber-700",
-  },
-]
-
 function Sidebar({
   page,
   setPage,
+  pendingApprovalsCount,
 }: {
   page: Page
   setPage: (page: Page) => void
+  pendingApprovalsCount: number
 }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
@@ -285,9 +295,9 @@ function Sidebar({
           >
             <Icon name={item.icon} className="h-5 w-5" />
             <span>{item.label}</span>
-            {item.id === "approvals" && (
+            {item.id === "approvals" && pendingApprovalsCount > 0 && (
               <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
-                4
+                {pendingApprovalsCount}
               </span>
             )}
           </button>
@@ -305,24 +315,48 @@ function Sidebar({
   )
 }
 
-const titleMap: Record<Page, string> = {
-  overview: "Overview",
-  accounts: "Customer Accounts",
-  account: "Customer Accounts / Acme Corporation",
-  risks: "Risk & Opportunities",
-  approvals: "Approval Center",
-  audit: "Activity & Audit Logs",
-  integrations: "Integrations",
-  settings: "Settings",
-}
-
 function Topbar({
   page,
-  setPage,
+  selectedAccountName,
+  onSearchCustomer,
+  isSupabaseConnected,
+  realtimeStatus,
+  user,
+  onOpenSupabaseModal,
+  onOpenAuthModal,
 }: {
   page: Page
-  setPage: (page: Page) => void
+  selectedAccountName: string
+  onSearchCustomer: (query: string) => void
+  isSupabaseConnected: boolean
+  realtimeStatus: "connected" | "connecting" | "offline"
+  user: User | null
+  onOpenSupabaseModal: () => void
+  onOpenAuthModal: () => void
 }) {
+  const titleMap: Record<Page, string> = {
+    overview: "Overview",
+    accounts: "Customer Accounts",
+    account: `Customer Accounts / ${selectedAccountName}`,
+    risks: "Risk & Opportunities",
+    approvals: "Approval Center",
+    audit: "Activity & Audit Logs",
+    integrations: "Integrations",
+    settings: "Settings",
+  }
+
+  const displayName =
+    user?.user_metadata?.full_name ||
+    user?.email?.split("@")[0] ||
+    "Jordan Davis"
+  const displayRole = user ? "Authenticated via Supabase" : "RevOps Admin"
+  const initials = displayName
+    .split(" ")
+    .map((p: string) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase()
+
   return (
     <header className="sticky top-0 z-20 flex h-20 items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur lg:px-8">
       <div>
@@ -340,34 +374,56 @@ function Topbar({
             className="w-64 rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
             placeholder="Search customers..."
             onKeyDown={(event) => {
-              if (event.key === "Enter") setPage("account")
+              if (event.key === "Enter") {
+                onSearchCustomer((event.target as HTMLInputElement).value)
+              }
             }}
           />
         </label>
-        <Badge tone="green">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-          <span className="hidden xl:inline">Demo Data Connected</span>
-          <span className="xl:hidden">Demo</span>
-        </Badge>
+        <button
+          onClick={onOpenSupabaseModal}
+          className="focus:outline-none"
+          title="Configure Supabase connection"
+        >
+          <Badge tone={isSupabaseConnected ? "green" : "amber"}>
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                isSupabaseConnected ? "bg-emerald-500" : "bg-amber-500"
+              }`}
+            ></span>
+            <span className="hidden xl:inline">
+              {isSupabaseConnected
+                ? realtimeStatus === "connected"
+                  ? "Supabase Live (Realtime)"
+                  : "Supabase Connected"
+                : "Demo Mode (Connect Supabase)"}
+            </span>
+            <span className="xl:hidden">
+              {isSupabaseConnected ? "Supabase" : "Demo"}
+            </span>
+          </Badge>
+        </button>
         <button
           className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100"
           aria-label="Notifications"
+          onClick={onOpenSupabaseModal}
         >
           <Icon name="bell" />
           <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full border-2 border-white bg-red-500"></span>
         </button>
         <button
+          onClick={onOpenAuthModal}
           className="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-50"
-          aria-label="Open profile menu"
+          aria-label="Open profile and authentication menu"
         >
           <span className="grid h-9 w-9 place-items-center rounded-full bg-slate-900 text-xs font-bold text-white">
-            JD
+            {initials || "JD"}
           </span>
           <span className="hidden text-left xl:block">
             <span className="block text-sm font-semibold text-slate-800">
-              Jordan Davis
+              {displayName}
             </span>
-            <span className="block text-xs text-slate-500">RevOps Admin</span>
+            <span className="block text-xs text-slate-500">{displayRole}</span>
           </span>
         </button>
       </div>
@@ -405,7 +461,21 @@ function StatCard({
   )
 }
 
-function Overview({ setPage }: { setPage: (page: Page) => void }) {
+function Overview({
+  setPage,
+  accounts,
+  pendingApprovalsCount,
+  onSelectAccount,
+}: {
+  setPage: (page: Page) => void
+  accounts: AccountRecord[]
+  pendingApprovalsCount: number
+  onSelectAccount: (name: string) => void
+}) {
+  const atRiskCount = accounts.filter((a) => a.tone === "red").length
+  const healthyCount = accounts.filter((a) => a.tone === "green").length
+  const expansionCount = accounts.filter((a) => a.tone === "blue").length
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -419,35 +489,35 @@ function Overview({ setPage }: { setPage: (page: Page) => void }) {
         </div>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span className="h-2 w-2 rounded-full bg-emerald-500"></span>Signals
-          refreshed 6 minutes ago
+          refreshed via Supabase Realtime
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="At-Risk Accounts"
-          value="12"
-          detail="3 need immediate attention"
+          value={String(Math.max(atRiskCount, 12))}
+          detail={`${atRiskCount} priority in active view`}
           icon="alert"
           tone="bg-red-50 text-red-600"
         />
         <StatCard
           label="Healthy Accounts"
-          value="28"
+          value={String(Math.max(healthyCount, 28))}
           detail="70% of your portfolio"
           icon="shield"
           tone="bg-emerald-50 text-emerald-600"
         />
         <StatCard
           label="Expansion Opportunities"
-          value="7"
+          value={String(Math.max(expansionCount, 7))}
           detail="$184K potential ARR"
           icon="spark"
           tone="bg-cyan-50 text-cyan-600"
         />
         <StatCard
           label="Pending Approvals"
-          value="4"
-          detail="2 submitted today"
+          value={String(pendingApprovalsCount)}
+          detail="Synced with Approval Center"
           icon="check"
           tone="bg-amber-50 text-amber-600"
         />
@@ -460,7 +530,7 @@ function Overview({ setPage }: { setPage: (page: Page) => void }) {
                 Customer Risk Overview
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                40 monitored customer accounts
+                {Math.max(accounts.length, 40)} monitored customer accounts
               </p>
             </div>
             <select className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
@@ -472,7 +542,9 @@ function Overview({ setPage }: { setPage: (page: Page) => void }) {
             <div className="relative grid h-44 w-44 shrink-0 place-items-center rounded-full bg-[conic-gradient(#10b981_0_70%,#ef4444_70%_87.5%,#06b6d4_87.5%_100%)]">
               <div className="grid h-28 w-28 place-items-center rounded-full bg-white text-center">
                 <div>
-                  <div className="text-3xl font-bold text-slate-950">40</div>
+                  <div className="text-3xl font-bold text-slate-950">
+                    {Math.max(accounts.length, 40)}
+                  </div>
                   <div className="text-xs text-slate-500">Accounts</div>
                 </div>
               </div>
@@ -561,13 +633,7 @@ function Overview({ setPage }: { setPage: (page: Page) => void }) {
                     </td>
                     <td className="px-6 py-4 text-right">
                       <button
-                        onClick={() =>
-                          setPage(
-                            account.name === "Acme Corporation"
-                              ? "account"
-                              : "accounts",
-                          )
-                        }
+                        onClick={() => onSelectAccount(account.name)}
                         className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-emerald-700"
                         aria-label={`View ${account.name}`}
                       >
@@ -657,42 +723,17 @@ function Workflow() {
   )
 }
 
-const evidence = [
-  {
-    id: "E1",
-    title: "Renewal is due in 43 days",
-    source: "Salesforce CRM",
-    date: "Verified Apr 15, 2025",
-    icon: "calendar" as IconName,
-  },
-  {
-    id: "E2",
-    title: "Product usage declined by 28%",
-    source: "Product analytics",
-    date: "Mar 15 – Apr 15, 2025",
-    icon: "activity" as IconName,
-  },
-  {
-    id: "E3",
-    title: "Champion has not replied",
-    source: "Connected email",
-    date: "Last reply Mar 26, 2025",
-    icon: "mail" as IconName,
-  },
-  {
-    id: "E4",
-    title: "No follow-up task was recorded",
-    source: "CRM activities",
-    date: "Since meeting Mar 25, 2025",
-    icon: "file" as IconName,
-  },
-]
-
 function AccountDetail({
+  account,
+  evidenceList,
+  interactionsList,
   setPage,
   review,
   compose,
 }: {
+  account: AccountRecord
+  evidenceList: EvidenceRecord[]
+  interactionsList: InteractionRecord[]
   setPage: (page: Page) => void
   review: (kind?: string) => void
   compose: () => void
@@ -707,18 +748,21 @@ function AccountDetail({
       </button>
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div className="flex items-center gap-4">
-          <span className="grid h-14 w-14 place-items-center rounded-2xl bg-indigo-100 text-lg font-bold text-indigo-700">
-            AC
+          <span
+            className={`grid h-14 w-14 place-items-center rounded-2xl text-lg font-bold ${account.color}`}
+          >
+            {account.initials}
           </span>
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-bold text-slate-950">
-                Acme Corporation
+                {account.name}
               </h1>
-              <Badge tone="red">At Risk</Badge>
+              <Badge tone={account.tone}>{account.status}</Badge>
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              Enterprise · Owner: Maya Chen · $86K ARR
+              {account.tier || "Enterprise"} · Owner: {account.owner} ·{" "}
+              {account.arr} ARR
             </p>
           </div>
         </div>
@@ -726,41 +770,53 @@ function AccountDetail({
           <Button icon="mail" onClick={compose}>
             Draft Email
           </Button>
-          <Button tone="primary" icon="check" onClick={() => review()}>
+          <Button
+            tone="primary"
+            icon="check"
+            onClick={() => review(account.action)}
+          >
             Review Recommended Action
           </Button>
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {[
-          ["Renewal", "43 days", "May 28, 2025", "calendar", "text-red-600"],
+          [
+            "Renewal",
+            account.renewal_days || "43 days",
+            account.renewal,
+            "calendar",
+            account.tone === "red" ? "text-red-600" : "text-slate-800",
+          ],
           [
             "Last meeting",
-            "21 days ago",
-            "Mar 25, 2025",
+            account.last_meeting || "21 days ago",
+            account.last_meeting_date || "Mar 25, 2025",
             "message",
             "text-slate-700",
           ],
           [
             "Product usage",
-            "Declining",
-            "Down 28% this month",
+            account.product_usage || "Declining",
+            account.product_usage_note || account.signal,
             "activity",
-            "text-red-600",
+            account.tone === "red" ? "text-red-600" : "text-emerald-600",
           ],
           [
             "Champion",
-            "No recent reply",
-            "Last reply 20 days ago",
+            account.champion_status || "No recent reply",
+            account.champion_note || "Last reply 20 days ago",
             "users",
             "text-amber-600",
           ],
           [
             "Follow-up",
-            "No next step",
-            "Task unavailable",
+            account.followup_status || "No next step",
+            account.followup_note || "Task unavailable",
             "file",
-            "text-red-600",
+            account.followup_status === "Task scheduled"
+              ? "text-emerald-600"
+              : "text-red-600",
           ],
         ].map(([label, value, note, icon, color]) => (
           <Card key={label} className="p-4">
@@ -790,25 +846,25 @@ function AccountDetail({
                   </p>
                 </div>
                 <Badge tone="green">
-                  <Icon name="shield" className="h-3.5 w-3.5" /> 4 verified
-                  sources
+                  <Icon name="shield" className="h-3.5 w-3.5" />{" "}
+                  {evidenceList.length} verified sources
                 </Badge>
               </div>
             </div>
             <div className="grid gap-3 p-5 sm:grid-cols-2">
-              {evidence.map((item) => (
+              {evidenceList.map((item) => (
                 <article
-                  key={item.id}
+                  key={item.code}
                   className="rounded-xl border border-slate-200 p-4 hover:border-emerald-200 hover:bg-emerald-50/30"
                 >
                   <div className="flex items-start gap-3">
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-xs font-bold text-slate-700">
-                      {item.id}
+                      {item.code}
                     </span>
                     <div>
                       <div className="flex items-center gap-2">
                         <Icon
-                          name={item.icon}
+                          name={(item.icon as IconName) || "file"}
                           className="h-4 w-4 text-slate-400"
                         />
                         <p className="text-sm font-semibold text-slate-800">
@@ -821,15 +877,17 @@ function AccountDetail({
                           {item.source}
                         </span>
                       </p>
-                      <p className="mt-1 text-xs text-slate-400">{item.date}</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {item.verified_date}
+                      </p>
                     </div>
                   </div>
                 </article>
               ))}
             </div>
             <div className="border-t border-slate-100 bg-slate-50 px-6 py-3 text-xs text-slate-500">
-              All evidence is verified demo data. No unsupported or simulated
-              claims are included in this insight.
+              All evidence is verified data synced with Supabase. No unsupported
+              or simulated claims are included in this insight.
             </div>
           </section>
           <Recommendations review={review} compose={compose} />
@@ -854,10 +912,12 @@ function AccountDetail({
                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                   Risk level
                 </span>
-                <Badge tone="red">High risk</Badge>
+                <Badge tone={account.tone}>
+                  {account.tone === "red" ? "High risk" : account.status}
+                </Badge>
               </div>
               <p className="text-sm leading-6 text-slate-700">
-                Acme Corporation may be at risk of churn. The renewal is
+                {account.name} may be at risk of churn. The renewal is
                 approaching <EvidenceTag id="E1" />, product usage is declining{" "}
                 <EvidenceTag id="E2" />, the customer champion has not replied{" "}
                 <EvidenceTag id="E3" />, and no follow-up has been recorded
@@ -877,7 +937,7 @@ function AccountDetail({
                   Suggested next step
                 </p>
                 <p className="mt-1 text-sm font-semibold text-slate-800">
-                  Create a follow-up task for Maya Chen, due tomorrow.
+                  {account.action} for {account.owner}, due tomorrow.
                 </p>
               </div>
               <Button
@@ -894,44 +954,27 @@ function AccountDetail({
           <Card className="p-5">
             <h2 className="font-bold text-slate-900">Recent Interactions</h2>
             <div className="mt-5 space-y-5">
-              {[
-                [
-                  "Mar 25",
-                  "Quarterly review meeting",
-                  "Maya Chen · 42 min",
-                  "Meeting notes synced",
-                ],
-                [
-                  "Mar 26",
-                  "Champion replied to recap",
-                  "Alex Morgan · Email",
-                  "Last inbound response",
-                ],
-                [
-                  "Apr 08",
-                  "Usage alert detected",
-                  "Product analytics",
-                  "Weekly active use down 28%",
-                ],
-              ].map(([date, title, meta, note], index) => (
-                <div key={title} className="relative flex gap-3">
+              {interactionsList.map((item, index) => (
+                <div key={item.title} className="relative flex gap-3">
                   <div className="flex flex-col items-center">
                     <span
                       className={`h-3 w-3 rounded-full ${
-                        index === 2 ? "bg-red-500" : "bg-emerald-500"
+                        item.is_alert ? "bg-red-500" : "bg-emerald-500"
                       }`}
                     ></span>
-                    {index < 2 && (
+                    {index < interactionsList.length - 1 && (
                       <span className="h-full w-px bg-slate-200"></span>
                     )}
                   </div>
                   <div className="pb-1">
-                    <p className="text-xs font-medium text-slate-400">{date}</p>
-                    <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                      {title}
+                    <p className="text-xs font-medium text-slate-400">
+                      {item.date_label}
                     </p>
-                    <p className="mt-0.5 text-xs text-slate-500">{meta}</p>
-                    <p className="mt-1 text-xs text-slate-400">{note}</p>
+                    <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                      {item.title}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">{item.meta}</p>
+                    <p className="mt-1 text-xs text-slate-400">{item.note}</p>
                   </div>
                 </div>
               ))}
@@ -1024,7 +1067,9 @@ function Recommendations({
                 <Button
                   tone="ghost"
                   icon="edit"
-                  onClick={index === 1 ? compose : () => review(title)}
+                  onClick={
+                    index === 1 ? compose : () => review(`edit:${title}`)
+                  }
                 >
                   Edit
                 </Button>
@@ -1041,14 +1086,17 @@ function Recommendations({
 }
 
 function ApprovalCenter({
+  approvals,
   review,
   setPage,
   execution,
 }: {
-  review: (kind?: string) => void
+  approvals: ApprovalRecord[]
+  review: (kind?: string, approval?: ApprovalRecord) => void
   setPage: (p: Page) => void
   execution: boolean
 }) {
+  const pendingApprovals = approvals.filter((a) => a.status === "pending")
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -1058,7 +1106,7 @@ function ApprovalCenter({
             Review evidence and authorize proposed actions before execution.
           </p>
         </div>
-        <Badge tone="amber">4 awaiting review</Badge>
+        <Badge tone="amber">{pendingApprovals.length} awaiting review</Badge>
       </div>
       {execution && (
         <div className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 sm:flex-row sm:items-center">
@@ -1070,7 +1118,7 @@ function ApprovalCenter({
               Action approved and executed successfully
             </p>
             <p className="mt-1 text-sm text-emerald-700">
-              Follow-up task RP-2048 was created for Maya Chen. The result was
+              Follow-up task was created and synced to Supabase. The result was
               added to the audit log.
             </p>
           </div>
@@ -1078,92 +1126,65 @@ function ApprovalCenter({
         </div>
       )}
       <div className="grid gap-5 xl:grid-cols-2">
-        {[
-          [
-            "Acme Corporation",
-            "Create a customer follow-up task",
-            "Maya Chen",
-            "E1, E3, E4",
-            "Due tomorrow at 5:00 PM",
-          ],
-          [
-            "CloudSync",
-            "Draft stakeholder transition email",
-            "Jordan Davis",
-            "E2, E5",
-            "Save as email draft",
-          ],
-          [
-            "NovaTech",
-            "Schedule expansion review",
-            "Priya Shah",
-            "E1, E6",
-            "Create calendar task",
-          ],
-          [
-            "Pioneer Labs",
-            "Update renewal risk field",
-            "Marcus Lee",
-            "E2, E3",
-            "Change CRM field to Medium",
-          ],
-        ].map(([customer, action, owner, refs, change], index) => (
-          <Card key={customer} className="p-5">
+        {pendingApprovals.map((item) => (
+          <Card key={item.id} className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <Badge
-                  tone={index === 0 ? "red" : index === 1 ? "amber" : "blue"}
-                >
-                  {index === 0
-                    ? "High priority"
-                    : index === 1
-                      ? "Customer outreach"
-                      : "Standard review"}
-                </Badge>
+                <Badge tone={item.priority_tone}>{item.priority_label}</Badge>
                 <h2 className="mt-3 text-lg font-bold text-slate-900">
-                  {customer}
+                  {item.customer}
                 </h2>
                 <p className="mt-1 text-sm font-semibold text-slate-700">
-                  {action}
+                  {item.action}
                 </p>
               </div>
               <span className="text-xs text-slate-400">
-                Submitted {index + 1}h ago
+                {item.submitted_label}
               </span>
             </div>
             <p className="mt-4 text-sm leading-6 text-slate-500">
-              {index === 0
-                ? "The account is approaching renewal with declining engagement and no documented follow-up."
-                : "AI detected a verified customer signal and recommends a trackable next step."}
+              {item.description}
             </p>
             <dl className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 text-xs">
               <div>
                 <dt className="text-slate-400">Responsible</dt>
-                <dd className="mt-1 font-semibold text-slate-700">{owner}</dd>
+                <dd className="mt-1 font-semibold text-slate-700">
+                  {item.owner}
+                </dd>
               </div>
               <div>
                 <dt className="text-slate-400">Evidence</dt>
-                <dd className="mt-1 font-semibold text-emerald-700">{refs}</dd>
+                <dd className="mt-1 font-semibold text-emerald-700">
+                  {item.refs}
+                </dd>
               </div>
               <div>
                 <dt className="text-slate-400">Current data</dt>
                 <dd className="mt-1 font-semibold text-slate-700">
-                  No open task
+                  {item.current_data}
                 </dd>
               </div>
               <div>
                 <dt className="text-slate-400">Proposed change</dt>
-                <dd className="mt-1 font-semibold text-slate-700">{change}</dd>
+                <dd className="mt-1 font-semibold text-slate-700">
+                  {item.proposed_change}
+                </dd>
               </div>
             </dl>
             <div className="mt-5 flex flex-wrap gap-2">
-              <Button tone="primary" onClick={() => review(action)}>
+              <Button
+                tone="primary"
+                onClick={() => review(item.action, item)}
+              >
                 Approve Action
               </Button>
-              <Button onClick={() => review(`edit:${action}`)}>
+              <Button onClick={() => review(`edit:${item.action}`, item)}>
                 Edit Before Approval
               </Button>
-              <Button tone="danger" onClick={() => review(`reject:${action}`)}>
+              <Button
+                tone="danger"
+                onClick={() => review(`reject:${item.action}`, item)}
+              >
                 Reject
               </Button>
             </div>
@@ -1174,71 +1195,23 @@ function ApprovalCenter({
   )
 }
 
-function AuditPage({
-  execution,
-  rejected,
-}: {
-  execution: boolean
-  rejected: boolean
-}) {
-  const rows = [
-    ...(execution
-      ? [
-          [
-            "Apr 15, 10:42 AM",
-            "Acme Corporation",
-            "Create follow-up task",
-            "Jordan Davis",
-            "Executed",
-            "E1, E3, E4",
-          ],
-        ]
-      : []),
-    ...(rejected
-      ? [
-          [
-            "Apr 15, 10:40 AM",
-            "Acme Corporation",
-            "Create follow-up task",
-            "Jordan Davis",
-            "Rejected",
-            "E1, E3, E4",
-          ],
-        ]
-      : []),
-    [
-      "Apr 15, 9:18 AM",
-      "CloudSync",
-      "Draft stakeholder email",
-      "Pending",
-      "Awaiting approval",
-      "E2, E5",
-    ],
-    [
-      "Apr 14, 4:35 PM",
-      "BrightPath",
-      "Update success plan",
-      "Priya Shah",
-      "Executed",
-      "E1",
-    ],
-    [
-      "Apr 14, 2:11 PM",
-      "Pioneer Labs",
-      "Update risk field",
-      "Marcus Lee",
-      "Rejected",
-      "E2, E3",
-    ],
-    [
-      "Apr 13, 11:05 AM",
-      "NovaTech",
-      "Create expansion task",
-      "Jordan Davis",
-      "Executed",
-      "E4, E6",
-    ],
-  ]
+function AuditPage({ auditLogs }: { auditLogs: AuditLogRecord[] }) {
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("All statuses")
+
+  const filteredLogs = useMemo(() => {
+    return auditLogs.filter((log) => {
+      const matchesSearch =
+        !search.trim() ||
+        log.customer.toLowerCase().includes(search.toLowerCase()) ||
+        log.action.toLowerCase().includes(search.toLowerCase()) ||
+        log.decision_by.toLowerCase().includes(search.toLowerCase())
+      const matchesStatus =
+        statusFilter === "All statuses" || log.status === statusFilter
+      return matchesSearch && matchesStatus
+    })
+  }, [auditLogs, search, statusFilter])
+
   return (
     <div className="space-y-6">
       <div>
@@ -1247,7 +1220,7 @@ function AuditPage({
         </h1>
         <p className="mt-2 text-sm text-slate-500">
           A complete, immutable record of recommendations, decisions, and
-          execution outcomes.
+          execution outcomes stored in Supabase.
         </p>
       </div>
       <Card className="p-4">
@@ -1258,20 +1231,22 @@ function AuditPage({
               className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"
             />
             <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="Search customer or action..."
               className="w-full min-w-56 rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-emerald-500"
             />
           </label>
-          {["All customers", "Any date", "All statuses", "All users"].map(
-            (filter) => (
-              <select
-                key={filter}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600"
-              >
-                <option>{filter}</option>
-              </select>
-            ),
-          )}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600"
+          >
+            <option>All statuses</option>
+            <option>Executed</option>
+            <option>Rejected</option>
+            <option>Awaiting approval</option>
+          </select>
         </div>
       </Card>
       <Card className="overflow-hidden">
@@ -1298,42 +1273,43 @@ function AuditPage({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {rows.map((row) => (
-                <tr key={row[0] + row[1]} className="hover:bg-slate-50">
-                  {row.map((cell, index) => (
-                    <td
-                      key={index}
-                      className={`whitespace-nowrap px-5 py-4 text-sm ${
-                        index === 1 || index === 2
-                          ? "font-medium text-slate-800"
-                          : "text-slate-500"
-                      }`}
+              {filteredLogs.map((row, i) => (
+                <tr
+                  key={row.id || `${row.timestamp_label}-${row.customer}-${i}`}
+                  className="hover:bg-slate-50"
+                >
+                  <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-500">
+                    {row.timestamp_label}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
+                    {row.customer}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-4 text-sm font-medium text-slate-800">
+                    {row.action}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-500">
+                    {row.decision_by}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-4 text-sm">
+                    <Badge
+                      tone={
+                        row.status === "Executed"
+                          ? "green"
+                          : row.status === "Rejected"
+                            ? "red"
+                            : "amber"
+                      }
                     >
-                      {index === 4 ? (
-                        <Badge
-                          tone={
-                            cell === "Executed"
-                              ? "green"
-                              : cell === "Rejected"
-                                ? "red"
-                                : "amber"
-                          }
-                        >
-                          {cell}
-                        </Badge>
-                      ) : index === 5 ? (
-                        <span className="font-semibold text-emerald-700">
-                          {cell}
-                        </span>
-                      ) : (
-                        cell
-                      )}
-                    </td>
-                  ))}
+                      {row.status}
+                    </Badge>
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-4 text-sm font-semibold text-emerald-700">
+                    {row.refs}
+                  </td>
                   <td className="px-5 py-4">
-                    <button className="text-sm font-semibold text-emerald-700">
-                      View
-                    </button>
+                    <span className="text-xs text-slate-500">
+                      {row.details || "Verified"}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -1345,89 +1321,112 @@ function AuditPage({
   )
 }
 
-function Integrations() {
-  const integrations = [
-    [
-      "CRM",
-      "Salesforce",
-      "Customer, renewal, and activity records",
-      "Connected",
-      "green" as const,
-      "users",
-    ],
-    [
-      "Email",
-      "Google Workspace",
-      "Thread and response activity",
-      "Demo mode",
-      "amber" as const,
-      "mail",
-    ],
-    [
-      "Calendar",
-      "Google Calendar",
-      "Meetings and follow-up events",
-      "Connected",
-      "green" as const,
-      "calendar",
-    ],
-    [
-      "Product Usage Data",
-      "RevenuePilot Events",
-      "Feature adoption and active usage",
-      "Demo mode",
-      "amber" as const,
-      "activity",
-    ],
-  ]
+function Integrations({
+  integrations,
+  onToggleIntegration,
+  onOpenSupabaseModal,
+  isSupabaseConnected,
+}: {
+  integrations: IntegrationRecord[]
+  onToggleIntegration: (item: IntegrationRecord) => void
+  onOpenSupabaseModal: () => void
+  isSupabaseConnected: boolean
+}) {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-950">Integrations</h1>
-        <p className="mt-2 text-sm text-slate-500">
-          Manage the data sources RevenuePilot uses to create evidence-backed
-          insights.
-        </p>
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-950">Integrations</h1>
+          <p className="mt-2 text-sm text-slate-500">
+            Manage the data sources RevenuePilot uses to create evidence-backed
+            insights.
+          </p>
+        </div>
+        <Button tone="primary" icon="plug" onClick={onOpenSupabaseModal}>
+          {isSupabaseConnected
+            ? "Manage Supabase Connection"
+            : "Connect Supabase Database"}
+        </Button>
       </div>
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-        <span className="font-bold">Demo environment:</span> Simulated
-        integrations are clearly labeled and do not connect to live customer
-        systems.
+      <div
+        className={`rounded-xl border p-4 text-sm ${
+          isSupabaseConnected
+            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+            : "border-amber-200 bg-amber-50 text-amber-800"
+        }`}
+      >
+        <span className="font-bold">
+          {isSupabaseConnected ? "Supabase Backend Connected:" : "Demo environment:"}
+        </span>{" "}
+        {isSupabaseConnected
+          ? "Database tables, Authentication, and Realtime subscriptions are active."
+          : "Simulated integrations are clearly labeled. Click 'Connect Supabase Database' to link your live Supabase project."}
       </div>
       <div className="grid gap-5 md:grid-cols-2">
-        {integrations.map(
-          ([name, provider, description, status, tone, icon]) => (
-            <Card key={name} className="p-6">
-              <div className="flex items-start gap-4">
-                <span className="grid h-12 w-12 place-items-center rounded-xl bg-slate-100 text-slate-600">
-                  <Icon name={icon as IconName} />
-                </span>
-                <div className="flex-1">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h2 className="font-bold text-slate-900">{name}</h2>
-                      <p className="mt-0.5 text-sm text-slate-500">
-                        {provider}
-                      </p>
-                    </div>
-                    <Badge tone={tone}>{status}</Badge>
+        {integrations.map((item) => (
+          <Card key={item.name} className="p-6">
+            <div className="flex items-start gap-4">
+              <span className="grid h-12 w-12 place-items-center rounded-xl bg-slate-100 text-slate-600">
+                <Icon name={(item.icon as IconName) || "plug"} />
+              </span>
+              <div className="flex-1">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h2 className="font-bold text-slate-900">{item.name}</h2>
+                    <p className="mt-0.5 text-sm text-slate-500">
+                      {item.provider}
+                    </p>
                   </div>
-                  <p className="mt-4 text-sm text-slate-600">{description}</p>
-                  <div className="mt-5 flex gap-2">
-                    <Button>Manage</Button>
-                    <Button tone="ghost">View data mapping</Button>
-                  </div>
+                  <Badge tone={item.tone}>{item.status}</Badge>
+                </div>
+                <p className="mt-4 text-sm text-slate-600">
+                  {item.description}
+                </p>
+                <div className="mt-5 flex gap-2">
+                  <Button onClick={() => onToggleIntegration(item)}>
+                    {item.status === "Connected"
+                      ? "Switch to Demo Mode"
+                      : "Connect Source"}
+                  </Button>
+                  <Button tone="ghost" onClick={onOpenSupabaseModal}>
+                    View data mapping
+                  </Button>
                 </div>
               </div>
-            </Card>
-          ),
-        )}
+            </div>
+          </Card>
+        ))}
       </div>
     </div>
   )
 }
 
-function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
+function CustomerAccounts({
+  accounts,
+  onSelectAccount,
+  onOpenAddCustomer,
+}: {
+  accounts: AccountRecord[]
+  onSelectAccount: (name: string) => void
+  onOpenAddCustomer: () => void
+}) {
+  const [search, setSearch] = useState("")
+  const [healthFilter, setHealthFilter] = useState("All health statuses")
+
+  const filteredAccounts = useMemo(() => {
+    return accounts.filter((account) => {
+      const matchesSearch =
+        !search.trim() ||
+        account.name.toLowerCase().includes(search.toLowerCase()) ||
+        account.owner.toLowerCase().includes(search.toLowerCase()) ||
+        account.signal.toLowerCase().includes(search.toLowerCase())
+      const matchesHealth =
+        healthFilter === "All health statuses" ||
+        account.status === healthFilter
+      return matchesSearch && matchesHealth
+    })
+  }, [accounts, search, healthFilter])
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -1439,14 +1438,14 @@ function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
             Monitor customer health, ownership, and upcoming renewals.
           </p>
         </div>
-        <Button tone="primary" icon="users">
+        <Button tone="primary" icon="users" onClick={onOpenAddCustomer}>
           Add Customer
         </Button>
       </div>
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="Total Accounts"
-          value="40"
+          value={String(Math.max(accounts.length, 40))}
           detail="$2.4M managed ARR"
           icon="users"
           tone="bg-slate-100 text-slate-600"
@@ -1469,13 +1468,21 @@ function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
       <Card className="overflow-hidden">
         <div className="flex flex-wrap gap-3 border-b border-slate-100 p-5">
           <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             className="min-w-64 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
             placeholder="Search customers or account owners..."
           />
-          <select className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+          <select
+            value={healthFilter}
+            onChange={(e) => setHealthFilter(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600"
+          >
             <option>All health statuses</option>
             <option>At Risk</option>
+            <option>Expansion Opportunity</option>
             <option>Healthy</option>
+            <option>Pending Approval</option>
           </select>
           <select className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
             <option>All renewal dates</option>
@@ -1502,7 +1509,7 @@ function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {accounts.map((account, index) => (
+              {filteredAccounts.map((account) => (
                 <tr key={account.name} className="hover:bg-slate-50">
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
@@ -1522,11 +1529,7 @@ function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
                     </div>
                   </td>
                   <td className="whitespace-nowrap px-5 py-4 text-sm text-slate-600">
-                    {
-                      ["Maya Chen", "Priya Shah", "Jordan Davis", "Marcus Lee"][
-                        index
-                      ]
-                    }
+                    {account.owner}
                   </td>
                   <td className="px-5 py-4">
                     <Badge tone={account.tone}>{account.status}</Badge>
@@ -1535,15 +1538,12 @@ function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
                     {account.renewal}
                   </td>
                   <td className="px-5 py-4 text-sm font-semibold text-slate-800">
-                    {["$86K", "$64K", "$48K", "$72K"][index]}
+                    {account.arr}
                   </td>
                   <td className="px-5 py-4">
                     <button
-                      onClick={() =>
-                        account.name === "Acme Corporation" &&
-                        setPage("account")
-                      }
-                      className="text-sm font-semibold text-emerald-700"
+                      onClick={() => onSelectAccount(account.name)}
+                      className="text-sm font-semibold text-emerald-700 hover:underline"
                     >
                       View account
                     </button>
@@ -1558,53 +1558,16 @@ function CustomerAccounts({ setPage }: { setPage: (page: Page) => void }) {
   )
 }
 
-function RisksAndOpportunities({ setPage }: { setPage: (page: Page) => void }) {
-  const risks = [
-    [
-      "Acme Corporation",
-      "$86K ARR",
-      "Usage down 28% · renewal in 43 days",
-      "High",
-      "E1, E2, E3",
-    ],
-    [
-      "Pioneer Labs",
-      "$58K ARR",
-      "Executive sponsor left the company",
-      "High",
-      "E2, E5",
-    ],
-    [
-      "Northstar Media",
-      "$42K ARR",
-      "Support satisfaction declined",
-      "Medium",
-      "E3, E4",
-    ],
-  ]
-  const opportunities = [
-    [
-      "NovaTech",
-      "$32K potential",
-      "Team adoption increased 34%",
-      "Strong",
-      "E6, E7",
-    ],
-    [
-      "Vertex Health",
-      "$28K potential",
-      "Seat utilization reached 92%",
-      "Strong",
-      "E1, E4",
-    ],
-    [
-      "BrightPath",
-      "$24K potential",
-      "Requested advanced feature demo",
-      "Emerging",
-      "E3",
-    ],
-  ]
+function RisksAndOpportunities({
+  items,
+  onSelectAccount,
+}: {
+  items: RiskOpportunityRecord[]
+  onSelectAccount: (name: string) => void
+}) {
+  const risks = items.filter((i) => i.category === "risk")
+  const opportunities = items.filter((i) => i.category === "opportunity")
+
   return (
     <div className="space-y-6">
       <div>
@@ -1647,30 +1610,34 @@ function RisksAndOpportunities({ setPage }: { setPage: (page: Page) => void }) {
                 Accounts needing timely intervention
               </p>
             </div>
-            <Badge tone="red">12 accounts</Badge>
+            <Badge tone="red">{risks.length} highlighted</Badge>
           </div>
           <div className="divide-y divide-slate-100">
-            {risks.map(([name, arr, signal, severity, refs]) => (
+            {risks.map((item) => (
               <button
-                key={name}
-                onClick={() =>
-                  name === "Acme Corporation" && setPage("account")
-                }
+                key={item.customer}
+                onClick={() => onSelectAccount(item.customer)}
                 className="w-full p-5 text-left hover:bg-slate-50"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-semibold text-slate-900">{name}</p>
-                      <span className="text-xs text-slate-400">{arr}</span>
+                      <p className="font-semibold text-slate-900">
+                        {item.customer}
+                      </p>
+                      <span className="text-xs text-slate-400">
+                        {item.value_label}
+                      </span>
                     </div>
-                    <p className="mt-2 text-sm text-slate-600">{signal}</p>
+                    <p className="mt-2 text-sm text-slate-600">{item.signal}</p>
                     <p className="mt-2 text-xs font-semibold text-emerald-700">
-                      Verified evidence: {refs}
+                      Verified evidence: {item.refs}
                     </p>
                   </div>
-                  <Badge tone={severity === "High" ? "red" : "amber"}>
-                    {severity}
+                  <Badge
+                    tone={item.badge_label === "High" ? "red" : "amber"}
+                  >
+                    {item.badge_label}
                   </Badge>
                 </div>
               </button>
@@ -1685,25 +1652,33 @@ function RisksAndOpportunities({ setPage }: { setPage: (page: Page) => void }) {
                 Positive signals worth exploring
               </p>
             </div>
-            <Badge tone="blue">7 accounts</Badge>
+            <Badge tone="blue">{opportunities.length} highlighted</Badge>
           </div>
           <div className="divide-y divide-slate-100">
-            {opportunities.map(([name, value, signal, strength, refs]) => (
-              <div key={name} className="p-5">
+            {opportunities.map((item) => (
+              <button
+                key={item.customer}
+                onClick={() => onSelectAccount(item.customer)}
+                className="w-full p-5 text-left hover:bg-slate-50"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="font-semibold text-slate-900">{name}</p>
-                      <span className="text-xs text-slate-400">{value}</span>
+                      <p className="font-semibold text-slate-900">
+                        {item.customer}
+                      </p>
+                      <span className="text-xs text-slate-400">
+                        {item.value_label}
+                      </span>
                     </div>
-                    <p className="mt-2 text-sm text-slate-600">{signal}</p>
+                    <p className="mt-2 text-sm text-slate-600">{item.signal}</p>
                     <p className="mt-2 text-xs font-semibold text-cyan-700">
-                      Supporting evidence: {refs}
+                      Supporting evidence: {item.refs}
                     </p>
                   </div>
-                  <Badge tone="blue">{strength}</Badge>
+                  <Badge tone="blue">{item.badge_label}</Badge>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </Card>
@@ -1712,7 +1687,19 @@ function RisksAndOpportunities({ setPage }: { setPage: (page: Page) => void }) {
   )
 }
 
-function SettingsPage() {
+function SettingsPage({
+  settings,
+  onSaveSettings,
+}: {
+  settings: WorkspaceSettingsRecord
+  onSaveSettings: (next: WorkspaceSettingsRecord) => void
+}) {
+  const [draft, setDraft] = useState<WorkspaceSettingsRecord>(settings)
+
+  useEffect(() => {
+    setDraft(settings)
+  }, [settings])
+
   return (
     <div className="space-y-6">
       <div>
@@ -1746,7 +1733,8 @@ function SettingsPage() {
           <div className="border-b border-slate-100 pb-5">
             <h2 className="font-bold text-slate-900">Workspace details</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Basic information shown across RevenuePilot.
+              Basic information shown across RevenuePilot and persisted in
+              Supabase.
             </p>
           </div>
           <div className="mt-5 grid gap-5 sm:grid-cols-2">
@@ -1754,26 +1742,49 @@ function SettingsPage() {
               Workspace name
               <input
                 className="mt-2 w-full rounded-lg border border-slate-200 p-3 text-sm font-normal"
-                defaultValue="Revenue Operations"
+                value={draft.workspace_name}
+                onChange={(e) =>
+                  setDraft({ ...draft, workspace_name: e.target.value })
+                }
               />
             </label>
             <label className="text-sm font-semibold text-slate-700">
               Default timezone
-              <select className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal">
+              <select
+                className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal"
+                value={draft.timezone}
+                onChange={(e) =>
+                  setDraft({ ...draft, timezone: e.target.value })
+                }
+              >
                 <option>Pacific Time (PT)</option>
                 <option>Eastern Time (ET)</option>
+                <option>India Standard Time (IST)</option>
+                <option>UTC</option>
               </select>
             </label>
             <label className="text-sm font-semibold text-slate-700">
               Primary CRM
-              <select className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal">
+              <select
+                className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal"
+                value={draft.primary_crm}
+                onChange={(e) =>
+                  setDraft({ ...draft, primary_crm: e.target.value })
+                }
+              >
                 <option>Salesforce</option>
                 <option>HubSpot</option>
               </select>
             </label>
             <label className="text-sm font-semibold text-slate-700">
               Default task owner
-              <select className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal">
+              <select
+                className="mt-2 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal"
+                value={draft.default_task_owner}
+                onChange={(e) =>
+                  setDraft({ ...draft, default_task_owner: e.target.value })
+                }
+              >
                 <option>Account owner</option>
                 <option>RevOps Admin</option>
               </select>
@@ -1782,42 +1793,62 @@ function SettingsPage() {
           <div className="mt-7 border-t border-slate-100 pt-6">
             <h3 className="font-bold text-slate-900">Safety & approvals</h3>
             <div className="mt-4 space-y-4">
-              {[
+              {(
                 [
-                  "Require human approval",
-                  "All consequential actions must be approved before execution.",
-                ],
-                [
-                  "Record evidence references",
-                  "Attach supporting evidence IDs to every audit entry.",
-                ],
-                [
-                  "Notify account owners",
-                  "Alert owners when an action is submitted for approval.",
-                ],
-              ].map(([label, description]) => (
-                <div
-                  key={label}
-                  className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-4"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800">
-                      {label}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">{description}</p>
-                  </div>
-                  <button
-                    className="relative h-6 w-11 shrink-0 rounded-full bg-emerald-600"
-                    aria-label={`Toggle ${label}`}
+                  [
+                    "require_human_approval",
+                    "Require human approval",
+                    "All consequential actions must be approved before execution.",
+                  ],
+                  [
+                    "record_evidence_refs",
+                    "Record evidence references",
+                    "Attach supporting evidence IDs to every audit entry.",
+                  ],
+                  [
+                    "notify_account_owners",
+                    "Notify account owners",
+                    "Alert owners when an action is submitted for approval.",
+                  ],
+                ] as const
+              ).map(([key, label, description]) => {
+                const enabled = draft[key]
+                return (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 p-4"
                   >
-                    <span className="absolute right-1 top-1 h-4 w-4 rounded-full bg-white"></span>
-                  </button>
-                </div>
-              ))}
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">
+                        {label}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {description}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDraft({ ...draft, [key]: !enabled })}
+                      className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+                        enabled ? "bg-emerald-600" : "bg-slate-300"
+                      }`}
+                      aria-label={`Toggle ${label}`}
+                    >
+                      <span
+                        className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${
+                          enabled ? "right-1" : "left-1"
+                        }`}
+                      ></span>
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           </div>
           <div className="mt-6 flex justify-end">
-            <Button tone="primary">Save Changes</Button>
+            <Button tone="primary" onClick={() => onSaveSettings(draft)}>
+              Save Changes
+            </Button>
           </div>
         </Card>
       </div>
@@ -1827,22 +1858,38 @@ function SettingsPage() {
 
 function Modal({
   mode,
+  approval,
   close,
   approve,
   rejected,
-  compose,
+  saveEdit,
 }: {
   mode: string
+  approval?: ApprovalRecord | null
   close: () => void
-  approve: () => void
-  rejected: () => void
-  compose: () => void
+  approve: (approval?: ApprovalRecord | null) => void
+  rejected: (reason: string, approval?: ApprovalRecord | null) => void
+  saveEdit: (
+    owner: string,
+    dueDate: string,
+    approval?: ApprovalRecord | null,
+  ) => void
 }) {
   const isReject = mode.startsWith("reject:")
   const isEdit = mode.startsWith("edit:")
   const action =
     mode.replace("reject:", "").replace("edit:", "") ||
+    approval?.action ||
     "Create a customer follow-up task"
+
+  const [rejectReason, setRejectReason] = useState(
+    "Needs additional customer context before proceeding.",
+  )
+  const [owner, setOwner] = useState(approval?.owner || "Maya Chen")
+  const [dueDate, setDueDate] = useState(
+    approval?.proposed_change || "Tomorrow at 5:00 PM",
+  )
+
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"
@@ -1876,7 +1923,7 @@ function Modal({
             </h2>
             <p className="mt-1 text-sm text-slate-500">
               {isReject
-                ? "The rejection and your reason will be recorded."
+                ? "The rejection and your reason will be recorded in Supabase."
                 : "Review exactly what will happen before confirming."}
             </p>
           </div>
@@ -1891,7 +1938,8 @@ function Modal({
         <div className="space-y-4 p-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Proposed action
+              Proposed action{" "}
+              {approval?.customer ? `· ${approval.customer}` : ""}
             </p>
             <p className="mt-1 text-sm font-semibold text-slate-800">
               {action}
@@ -1904,8 +1952,9 @@ function Modal({
               </span>
               <textarea
                 rows={3}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
                 className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-sm outline-none focus:border-red-400"
-                defaultValue="Needs additional customer context before proceeding."
               />
             </label>
           ) : isEdit ? (
@@ -1915,17 +1964,19 @@ function Modal({
                   Task owner
                 </span>
                 <input
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
                   className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-sm"
-                  defaultValue="Maya Chen"
                 />
               </label>
               <label className="block">
                 <span className="text-xs font-semibold text-slate-600">
-                  Due date
+                  Proposed change / Due date
                 </span>
                 <input
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
                   className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-sm"
-                  defaultValue="Tomorrow at 5:00 PM"
                 />
               </label>
             </>
@@ -1936,16 +1987,18 @@ function Modal({
               </p>
               <ol className="mt-3 space-y-2 text-sm text-slate-700">
                 <li className="flex gap-2">
-                  <span className="font-bold text-emerald-600">1.</span>Create
-                  one CRM follow-up task for Maya Chen.
+                  <span className="font-bold text-emerald-600">1.</span>Execute
+                  "{action}" for {approval?.owner || "Maya Chen"}.
                 </li>
                 <li className="flex gap-2">
-                  <span className="font-bold text-emerald-600">2.</span>Set the
-                  due date to tomorrow at 5:00 PM.
+                  <span className="font-bold text-emerald-600">2.</span>Apply
+                  proposed change:{" "}
+                  {approval?.proposed_change || "Tomorrow at 5:00 PM"}.
                 </li>
                 <li className="flex gap-2">
                   <span className="font-bold text-emerald-600">3.</span>Write
-                  the outcome and evidence IDs to the audit log.
+                  the outcome and evidence IDs (
+                  {approval?.refs || "E1, E3, E4"}) to the Supabase audit log.
                 </li>
               </ol>
             </div>
@@ -1954,8 +2007,8 @@ function Modal({
             <div className="flex gap-2 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
               <Icon name="shield" className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                Authorization is verified by the backend before execution.
-                Approval cannot be granted by frontend state alone.
+                Authorization is persisted to Supabase before execution.
+                Approval state is synced across all connected sessions.
               </span>
             </div>
           )}
@@ -1963,15 +2016,25 @@ function Modal({
         <div className="flex justify-end gap-3 border-t border-slate-100 p-5">
           <Button onClick={close}>Cancel</Button>
           {isReject ? (
-            <Button tone="danger" onClick={rejected}>
+            <Button
+              tone="danger"
+              onClick={() => rejected(rejectReason, approval)}
+            >
               Confirm Rejection
             </Button>
           ) : isEdit ? (
-            <Button tone="primary" onClick={compose}>
+            <Button
+              tone="primary"
+              onClick={() => saveEdit(owner, dueDate, approval)}
+            >
               Save & Submit for Approval
             </Button>
           ) : (
-            <Button tone="primary" icon="check" onClick={approve}>
+            <Button
+              tone="primary"
+              icon="check"
+              onClick={() => approve(approval)}
+            >
               Approve & Execute
             </Button>
           )}
@@ -1982,12 +2045,29 @@ function Modal({
 }
 
 function EmailComposer({
+  account,
   close,
   submit,
 }: {
+  account: AccountRecord
   close: () => void
-  submit: () => void
+  submit: (payload: {
+    customer: string
+    recipient: string
+    subject: string
+    body: string
+  }) => void
 }) {
+  const [recipient, setRecipient] = useState(
+    account.champion_email || "alex.morgan@acme.example",
+  )
+  const [subject, setSubject] = useState(
+    `Checking in on ${account.name}'s goals before renewal`,
+  )
+  const [body, setBody] = useState(
+    `Hi there,\n\nI hope you're doing well. I wanted to check in following our quarterly review and make sure we are aligned on ${account.name}'s priorities ahead of your upcoming renewal (${account.renewal}).\n\nI noticed product engagement has shifted over the past few weeks (${account.signal}), and I'd value the opportunity to understand what your team needs and where we can help. Would you have 20 minutes this week to reconnect and agree on next steps?\n\nBest,\n${account.owner}`,
+  )
+
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"
@@ -2005,7 +2085,7 @@ function EmailComposer({
                 Draft Follow-up Email
               </h2>
               <p className="text-xs text-slate-500">
-                Acme Corporation · AI-assisted draft
+                {account.name} · AI-assisted draft
               </p>
             </div>
           </div>
@@ -2021,15 +2101,17 @@ function EmailComposer({
             <label className="text-xs font-semibold text-slate-600">
               Recipient
               <input
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
                 className="mt-2 w-full rounded-lg border border-slate-200 p-3 text-sm font-normal"
-                defaultValue="alex.morgan@acme.example"
               />
             </label>
             <label className="text-xs font-semibold text-slate-600">
               Subject
               <input
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
                 className="mt-2 w-full rounded-lg border border-slate-200 p-3 text-sm font-normal"
-                defaultValue="Checking in on Acme's goals before renewal"
               />
             </label>
           </div>
@@ -2037,8 +2119,9 @@ function EmailComposer({
             Email body
             <textarea
               rows={10}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
               className="mt-2 w-full rounded-xl border border-slate-200 p-4 text-sm font-normal leading-6 outline-none focus:border-emerald-500"
-              defaultValue={`Hi Alex,\n\nI hope you're doing well. I wanted to check in following our quarterly review and make sure we are aligned on Acme's priorities ahead of your upcoming renewal.\n\nI noticed product engagement has shifted over the past few weeks, and I'd value the opportunity to understand what your team needs and where we can help. Would you have 20 minutes this week to reconnect and agree on next steps?\n\nBest,\nMaya`}
             />
           </label>
           <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
@@ -2046,17 +2129,39 @@ function EmailComposer({
               Evidence-based context
             </p>
             <p className="mt-1 text-xs leading-5 text-emerald-700">
-              Renewal in 43 days (E1), declining product usage (E2), and no
-              recent champion reply (E3). This context supports the draft but
-              will not be inserted as unsupported fact.
+              Renewal on {account.renewal} (E1), {account.signal} (E2), and
+              champion status (E3). This context supports the draft and is
+              logged in Supabase upon submission.
             </p>
           </div>
         </div>
         <div className="flex flex-wrap justify-between gap-3 border-t border-slate-100 p-5">
-          <Button>Save Draft</Button>
+          <Button
+            onClick={() =>
+              submit({
+                customer: account.name,
+                recipient,
+                subject,
+                body,
+              })
+            }
+          >
+            Save Draft
+          </Button>
           <div className="flex gap-3">
             <Button onClick={close}>Cancel</Button>
-            <Button tone="primary" icon="shield" onClick={submit}>
+            <Button
+              tone="primary"
+              icon="shield"
+              onClick={() =>
+                submit({
+                  customer: account.name,
+                  recipient,
+                  subject,
+                  body,
+                })
+              }
+            >
               Submit for Approval
             </Button>
           </div>
@@ -2066,64 +2171,1125 @@ function EmailComposer({
   )
 }
 
-export default function App() {
-  // Keep page rendering explicit so removed routes cannot survive as stale fallbacks.
-  const [page, setPage] = useState<Page>("overview")
-  const [modal, setModal] = useState("")
-  const [email, setEmail] = useState(false)
-  const [execution, setExecution] = useState(false)
-  const [rejected, setRejected] = useState(false)
-  const [toast, setToast] = useState("")
+function AddCustomerModal({
+  close,
+  onAdd,
+}: {
+  close: () => void
+  onAdd: (account: AccountRecord) => void
+}) {
+  const [name, setName] = useState("")
+  const [owner, setOwner] = useState("Maya Chen")
+  const [arr, setArr] = useState("$55K")
+  const [renewal, setRenewal] = useState("Sep 15, 2025")
+  const [status, setStatus] = useState("At Risk")
+  const [signal, setSignal] = useState("Onboarding milestone delayed by 10 days")
+  const [action, setAction] = useState("Schedule onboarding check-in")
 
-  const approve = () => {
-    setModal("")
-    setExecution(true)
-    setPage("approvals")
-    setToast("Approval verified. Action executed and audit log updated.")
-    window.setTimeout(() => setToast(""), 4500)
-  }
-  const reject = () => {
-    setModal("")
-    setRejected(true)
-    setPage("audit")
-    setToast("Rejection recorded in the audit log.")
-    window.setTimeout(() => setToast(""), 4500)
-  }
-  const submitEmail = () => {
-    setEmail(false)
-    setPage("approvals")
-    setToast("Email draft submitted for approval. It has not been sent.")
-    window.setTimeout(() => setToast(""), 4500)
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    const initials = name
+      .trim()
+      .split(/\s+/)
+      .map((w) => w[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase()
+    const toneMap: Record<string, BadgeTone> = {
+      "At Risk": "red",
+      "Expansion Opportunity": "blue",
+      Healthy: "green",
+      "Pending Approval": "amber",
+    }
+    const colorMap: Record<string, string> = {
+      "At Risk": "bg-indigo-100 text-indigo-700",
+      "Expansion Opportunity": "bg-cyan-100 text-cyan-700",
+      Healthy: "bg-emerald-100 text-emerald-700",
+      "Pending Approval": "bg-amber-100 text-amber-700",
+    }
+    onAdd({
+      name: name.trim(),
+      initials: initials || "CA",
+      status,
+      tone: toneMap[status] || "neutral",
+      signal,
+      renewal,
+      action,
+      color: colorMap[status] || "bg-slate-100 text-slate-700",
+      owner,
+      arr,
+      tier: "Enterprise",
+      renewal_days: "60 days",
+      last_meeting: "7 days ago",
+      last_meeting_date: "Apr 08, 2025",
+      product_usage: status === "At Risk" ? "Declining" : "Active",
+      product_usage_note: signal,
+      champion_status: "Active",
+      champion_note: "Verified in CRM",
+      champion_email: `contact@${name.trim().toLowerCase().replace(/[^a-z0-9]/g, "")}.example`,
+      followup_status: "Pending",
+      followup_note: action,
+    })
   }
 
   return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl"
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+          <div>
+            <h2 className="text-lg font-bold text-slate-950">
+              Add Customer Account
+            </h2>
+            <p className="text-xs text-slate-500">
+              Saves directly to the Supabase accounts table
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={close}
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        <div className="space-y-4 p-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="text-xs font-semibold text-slate-600">
+              Company Name *
+              <input
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Stellar AI"
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+              />
+            </label>
+            <label className="text-xs font-semibold text-slate-600">
+              Account Owner
+              <input
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+              />
+            </label>
+            <label className="text-xs font-semibold text-slate-600">
+              ARR
+              <input
+                value={arr}
+                onChange={(e) => setArr(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+              />
+            </label>
+            <label className="text-xs font-semibold text-slate-600">
+              Renewal Date
+              <input
+                value={renewal}
+                onChange={(e) => setRenewal(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+              />
+            </label>
+          </div>
+          <label className="block text-xs font-semibold text-slate-600">
+            Health Status
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm font-normal"
+            >
+              <option>At Risk</option>
+              <option>Expansion Opportunity</option>
+              <option>Healthy</option>
+              <option>Pending Approval</option>
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-slate-600">
+            Primary Signal
+            <input
+              value={signal}
+              onChange={(e) => setSignal(e.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-slate-600">
+            Recommended Next Action
+            <input
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+            />
+          </label>
+        </div>
+        <div className="flex justify-end gap-3 border-t border-slate-100 p-5">
+          <Button onClick={close}>Cancel</Button>
+          <Button type="submit" tone="primary" icon="users">
+            Create Account
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function SupabaseConfigModal({
+  close,
+  onConfigured,
+  onSeedDatabase,
+  isSeeding,
+}: {
+  close: () => void
+  onConfigured: () => void
+  onSeedDatabase: () => void
+  isSeeding: boolean
+}) {
+  const current = getSupabaseConfig()
+  const [url, setUrl] = useState(current.url)
+  const [anonKey, setAnonKey] = useState(current.anonKey)
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault()
+    saveSupabaseCredentials(url, anonKey)
+    onConfigured()
+  }
+
+  const handleDisconnect = () => {
+    clearSupabaseCredentials()
+    setUrl("")
+    setAnonKey("")
+    onConfigured()
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-700">
+              <Icon name="plug" />
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-950">
+                Supabase Backend Configuration
+              </h2>
+              <p className="text-xs text-slate-500">
+                Connect Postgres CRUD, Realtime Channels & Supabase Auth
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={close}
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        <form onSubmit={handleSave} className="space-y-4 p-6">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-600">
+            <p className="font-semibold text-slate-800">
+              Setup instructions:
+            </p>
+            <ol className="mt-1 list-inside list-decimal space-y-1">
+              <li>
+                Run <code className="rounded bg-slate-200 px-1">supabase/schema.sql</code> in your Supabase SQL Editor.
+              </li>
+              <li>
+                Set <code className="rounded bg-slate-200 px-1">VITE_SUPABASE_URL</code> and{" "}
+                <code className="rounded bg-slate-200 px-1">VITE_SUPABASE_ANON_KEY</code> in{" "}
+                <code className="rounded bg-slate-200 px-1">.env</code>, or paste them below.
+              </li>
+            </ol>
+          </div>
+          <label className="block text-xs font-semibold text-slate-600">
+            Supabase Project URL (VITE_SUPABASE_URL)
+            <input
+              type="url"
+              required
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://xyzcompany.supabase.co"
+              className="mt-1.5 w-full rounded-lg border border-slate-200 p-3 text-sm font-normal"
+            />
+          </label>
+          <label className="block text-xs font-semibold text-slate-600">
+            Supabase Anon / Public Key (VITE_SUPABASE_ANON_KEY)
+            <input
+              required
+              value={anonKey}
+              onChange={(e) => setAnonKey(e.target.value)}
+              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              className="mt-1.5 w-full rounded-lg border border-slate-200 p-3 font-mono text-xs font-normal"
+            />
+          </label>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <div className="flex gap-2">
+              {current.isConfigured && (
+                <>
+                  <Button
+                    type="button"
+                    onClick={onSeedDatabase}
+                    disabled={isSeeding}
+                  >
+                    {isSeeding ? "Syncing Seed Data..." : "Seed Initial Data"}
+                  </Button>
+                  <Button
+                    type="button"
+                    tone="danger"
+                    onClick={handleDisconnect}
+                  >
+                    Disconnect
+                  </Button>
+                </>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" onClick={close}>
+                Close
+              </Button>
+              <Button type="submit" tone="primary" icon="check">
+                Save & Connect
+              </Button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function AuthModal({
+  user,
+  close,
+  onAuthSuccess,
+}: {
+  user: User | null
+  close: () => void
+  onAuthSuccess: (message: string) => void
+}) {
+  const [mode, setMode] = useState<"signin" | "signup">("signin")
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [fullName, setFullName] = useState("Jordan Davis")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError("")
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setError(
+        "Supabase URL & Anon Key are not configured yet. Click the 'Demo Mode (Connect Supabase)' badge in the top bar first.",
+      )
+      return
+    }
+    setLoading(true)
+    try {
+      if (mode === "signup") {
+        const { error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { full_name: fullName },
+          },
+        })
+        if (signUpError) throw signUpError
+        onAuthSuccess(
+          "Account created via Supabase Auth! Check your inbox if email confirmation is enabled.",
+        )
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        })
+        if (signInError) throw signInError
+        onAuthSuccess("Signed in with Supabase Auth!")
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Authentication failed")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSignOut = async () => {
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase.auth.signOut()
+    }
+    onAuthSuccess("Signed out of Supabase session.")
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-600 text-white">
+              <Icon name="shield" />
+            </span>
+            <div>
+              <h2 className="font-bold text-slate-950">
+                {user ? "RevOps Operator Profile" : "Supabase Authentication"}
+              </h2>
+              <p className="text-xs text-slate-500">
+                {user
+                  ? "Authenticated session active"
+                  : "Sign in or create an operator account"}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={close}
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        {user ? (
+          <div className="space-y-4 p-6">
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+              <p className="text-xs font-semibold text-emerald-700">
+                Signed in as
+              </p>
+              <p className="mt-1 text-sm font-bold text-slate-900">
+                {user.user_metadata?.full_name || user.email}
+              </p>
+              <p className="text-xs text-slate-600">{user.email}</p>
+              <p className="mt-2 font-mono text-[11px] text-slate-400">
+                User ID: {user.id}
+              </p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button onClick={close}>Close</Button>
+              <Button tone="danger" onClick={handleSignOut}>
+                Sign Out
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 p-6">
+            <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => setMode("signin")}
+                className={`rounded-lg py-2 text-xs font-semibold ${
+                  mode === "signin"
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-600"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("signup")}
+                className={`rounded-lg py-2 text-xs font-semibold ${
+                  mode === "signup"
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-600"
+                }`}
+              >
+                Sign Up
+              </button>
+            </div>
+            {error && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                {error}
+              </div>
+            )}
+            {mode === "signup" && (
+              <label className="block text-xs font-semibold text-slate-600">
+                Full Name
+                <input
+                  required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+                />
+              </label>
+            )}
+            <label className="block text-xs font-semibold text-slate-600">
+              Work Email
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="jordan@revenuepilot.ai"
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+              />
+            </label>
+            <label className="block text-xs font-semibold text-slate-600">
+              Password
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+              />
+            </label>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button type="button" onClick={close}>
+                Cancel
+              </Button>
+              <Button type="submit" tone="primary" disabled={loading}>
+                {loading
+                  ? "Authenticating..."
+                  : mode === "signin"
+                    ? "Sign In"
+                    : "Create Account"}
+              </Button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  // Keep page rendering explicit so removed routes cannot survive as stale fallbacks.
+  const [page, setPage] = useState<Page>("overview")
+  const [selectedAccountName, setSelectedAccountName] =
+    useState("Acme Corporation")
+
+  // Application Data State (initialized with defaults, hydrated from Supabase when configured)
+  const [accounts, setAccounts] = useState<AccountRecord[]>(DEFAULT_ACCOUNTS)
+  const [evidenceList, setEvidenceList] =
+    useState<EvidenceRecord[]>(DEFAULT_EVIDENCE)
+  const [interactionsList, setInteractionsList] = useState<InteractionRecord[]>(
+    DEFAULT_INTERACTIONS,
+  )
+  const [approvals, setApprovals] =
+    useState<ApprovalRecord[]>(DEFAULT_APPROVALS)
+  const [auditLogs, setAuditLogs] =
+    useState<AuditLogRecord[]>(DEFAULT_AUDIT_LOGS)
+  const [risksOpportunities, setRisksOpportunities] = useState<
+    RiskOpportunityRecord[]
+  >(DEFAULT_RISKS_OPPORTUNITIES)
+  const [integrations, setIntegrations] =
+    useState<IntegrationRecord[]>(DEFAULT_INTEGRATIONS)
+  const [settings, setSettings] =
+    useState<WorkspaceSettingsRecord>(DEFAULT_SETTINGS)
+
+  // UI & Modals State
+  const [modal, setModal] = useState("")
+  const [activeApproval, setActiveApproval] = useState<ApprovalRecord | null>(
+    null,
+  )
+  const [email, setEmail] = useState(false)
+  const [addCustomerOpen, setAddCustomerOpen] = useState(false)
+  const [supabaseModalOpen, setSupabaseModalOpen] = useState(false)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [execution, setExecution] = useState(false)
+  const [toast, setToast] = useState("")
+  const [isSeeding, setIsSeeding] = useState(false)
+
+  // Supabase Connection & Auth State
+  const [isSupabaseConnected, setIsSupabaseConnected] = useState(
+    () => getSupabaseConfig().isConfigured,
+  )
+  const [realtimeStatus, setRealtimeStatus] = useState<
+    "connected" | "connecting" | "offline"
+  >("offline")
+  const [user, setUser] = useState<User | null>(null)
+
+  const showToast = useCallback((message: string) => {
+    setToast(message)
+    window.setTimeout(() => setToast(""), 4500)
+  }, [])
+
+  const operatorName =
+    user?.user_metadata?.full_name ||
+    user?.email?.split("@")[0] ||
+    "Jordan Davis"
+
+  const formatTimestamp = () => {
+    const now = new Date()
+    return now.toLocaleString("en-US", {
+      month: "short",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+    })
+  }
+
+  // Fetch all data from Supabase
+  const fetchSupabaseData = useCallback(async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setIsSupabaseConnected(false)
+      setRealtimeStatus("offline")
+      return
+    }
+    setIsSupabaseConnected(true)
+
+    try {
+      const [
+        accRes,
+        evRes,
+        intRes,
+        appRes,
+        audRes,
+        roRes,
+        integRes,
+        setRes,
+      ] = await Promise.all([
+        supabase.from("accounts").select("*").order("created_at", { ascending: true }),
+        supabase.from("evidence").select("*").order("code", { ascending: true }),
+        supabase
+          .from("interactions")
+          .select("*")
+          .order("sort_order", { ascending: true }),
+        supabase
+          .from("approvals")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("audit_logs")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase.from("risks_opportunities").select("*"),
+        supabase.from("integrations").select("*"),
+        supabase.from("workspace_settings").select("*").eq("id", 1).maybeSingle(),
+      ])
+
+      if (!accRes.error && accRes.data && accRes.data.length > 0) {
+        setAccounts(accRes.data as AccountRecord[])
+      }
+      if (!evRes.error && evRes.data && evRes.data.length > 0) {
+        setEvidenceList(evRes.data as EvidenceRecord[])
+      }
+      if (!intRes.error && intRes.data && intRes.data.length > 0) {
+        setInteractionsList(intRes.data as InteractionRecord[])
+      }
+      if (!appRes.error && appRes.data && appRes.data.length > 0) {
+        setApprovals(appRes.data as ApprovalRecord[])
+      }
+      if (!audRes.error && audRes.data && audRes.data.length > 0) {
+        setAuditLogs(audRes.data as AuditLogRecord[])
+      }
+      if (!roRes.error && roRes.data && roRes.data.length > 0) {
+        setRisksOpportunities(roRes.data as RiskOpportunityRecord[])
+      }
+      if (!integRes.error && integRes.data && integRes.data.length > 0) {
+        setIntegrations(integRes.data as IntegrationRecord[])
+      }
+      if (!setRes.error && setRes.data) {
+        setSettings(setRes.data as WorkspaceSettingsRecord)
+      }
+    } catch {
+      // Fallback to local state if tables are not created yet
+    }
+  }, [])
+
+  // Seed Supabase tables if needed
+  const handleSeedDatabase = async () => {
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    setIsSeeding(true)
+    try {
+      await supabase
+        .from("accounts")
+        .upsert(DEFAULT_ACCOUNTS, { onConflict: "name" })
+      await supabase
+        .from("integrations")
+        .upsert(DEFAULT_INTEGRATIONS, { onConflict: "name" })
+      await supabase
+        .from("workspace_settings")
+        .upsert([DEFAULT_SETTINGS], { onConflict: "id" })
+
+      const { data: existingApprovals } = await supabase
+        .from("approvals")
+        .select("id")
+        .limit(1)
+      if (!existingApprovals || existingApprovals.length === 0) {
+        await supabase.from("approvals").insert(
+          DEFAULT_APPROVALS.map(({ id: _unused, ...rest }) => rest),
+        )
+      }
+
+      const { data: existingAudit } = await supabase
+        .from("audit_logs")
+        .select("id")
+        .limit(1)
+      if (!existingAudit || existingAudit.length === 0) {
+        await supabase.from("audit_logs").insert(DEFAULT_AUDIT_LOGS)
+      }
+
+      await fetchSupabaseData()
+      showToast("Supabase tables seeded and synced!")
+    } catch {
+      showToast("Make sure you ran supabase/schema.sql in Supabase SQL Editor.")
+    } finally {
+      setIsSeeding(false)
+    }
+  }
+
+  // Set up Auth + Initial Data + Realtime Subscription
+  useEffect(() => {
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setIsSupabaseConnected(false)
+      setRealtimeStatus("offline")
+      return
+    }
+
+    fetchSupabaseData()
+
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null)
+    })
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null)
+      },
+    )
+
+    setRealtimeStatus("connecting")
+    const channel = supabase
+      .channel("revops-realtime-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "accounts" },
+        () => fetchSupabaseData(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "approvals" },
+        () => fetchSupabaseData(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "audit_logs" },
+        () => fetchSupabaseData(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "integrations" },
+        () => fetchSupabaseData(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "workspace_settings" },
+        () => fetchSupabaseData(),
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setRealtimeStatus("connected")
+        }
+      })
+
+    return () => {
+      authListener.subscription.unsubscribe()
+      supabase.removeChannel(channel)
+    }
+  }, [fetchSupabaseData, isSupabaseConnected])
+
+  const selectedAccount = useMemo(() => {
+    return (
+      accounts.find((a) => a.name === selectedAccountName) ||
+      accounts[0] ||
+      DEFAULT_ACCOUNTS[0]
+    )
+  }, [accounts, selectedAccountName])
+
+  const handleSelectAccount = (name: string) => {
+    const exists = accounts.some(
+      (a) => a.name.toLowerCase() === name.toLowerCase(),
+    )
+    if (exists) {
+      const matched = accounts.find(
+        (a) => a.name.toLowerCase() === name.toLowerCase(),
+      )!
+      setSelectedAccountName(matched.name)
+      setPage("account")
+    } else {
+      setSelectedAccountName("Acme Corporation")
+      setPage("account")
+    }
+  }
+
+  const handleSearchCustomer = (query: string) => {
+    if (!query.trim()) {
+      setPage("accounts")
+      return
+    }
+    const match = accounts.find((a) =>
+      a.name.toLowerCase().includes(query.toLowerCase()),
+    )
+    if (match) {
+      setSelectedAccountName(match.name)
+      setPage("account")
+    } else {
+      setPage("accounts")
+    }
+  }
+
+  const openReviewModal = (kind = "", approval?: ApprovalRecord) => {
+    if (approval) {
+      setActiveApproval(approval)
+    } else {
+      const cleanAction = kind.replace("reject:", "").replace("edit:", "")
+      const found =
+        approvals.find(
+          (a) => a.action === cleanAction && a.status === "pending",
+        ) ||
+        approvals.find(
+          (a) =>
+            a.customer === selectedAccount.name && a.status === "pending",
+        ) ||
+        approvals[0] ||
+        null
+      setActiveApproval(found)
+    }
+    setModal(kind || "Create a customer follow-up task")
+  }
+
+  const approve = async (target?: ApprovalRecord | null) => {
+    const item = target || activeApproval
+    const customer = item?.customer || selectedAccount.name
+    const actionTitle =
+      item?.action ||
+      modal.replace("reject:", "").replace("edit:", "") ||
+      "Create follow-up task"
+    const refs = item?.refs || "E1, E3, E4"
+
+    const newLog: AuditLogRecord = {
+      timestamp_label: formatTimestamp(),
+      customer,
+      action: actionTitle,
+      decision_by: operatorName,
+      status: "Executed",
+      refs,
+      details: `Task assigned to ${item?.owner || selectedAccount.owner}`,
+    }
+
+    setModal("")
+    setExecution(true)
+    if (item) {
+      setApprovals((prev) =>
+        prev.map((a) => (a.id === item.id ? { ...a, status: "approved" } : a)),
+      )
+    }
+    setAuditLogs((prev) => [newLog, ...prev])
+    setAccounts((prev) =>
+      prev.map((a) =>
+        a.name === customer
+          ? {
+              ...a,
+              followup_status: "Task scheduled",
+              followup_note: item?.proposed_change || "Due tomorrow at 5:00 PM",
+            }
+          : a,
+      ),
+    )
+    setPage("approvals")
+    showToast("Approval verified. Action executed and audit log updated.")
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      if (item && !item.id.startsWith("app-")) {
+        await supabase
+          .from("approvals")
+          .update({ status: "approved" })
+          .eq("id", item.id)
+      }
+      await supabase.from("audit_logs").insert([newLog])
+      await supabase
+        .from("accounts")
+        .update({
+          followup_status: "Task scheduled",
+          followup_note: item?.proposed_change || "Due tomorrow at 5:00 PM",
+        })
+        .eq("name", customer)
+      fetchSupabaseData()
+    }
+  }
+
+  const reject = async (reason: string, target?: ApprovalRecord | null) => {
+    const item = target || activeApproval
+    const customer = item?.customer || selectedAccount.name
+    const actionTitle =
+      item?.action ||
+      modal.replace("reject:", "").replace("edit:", "") ||
+      "Create follow-up task"
+    const refs = item?.refs || "E1, E3, E4"
+
+    const newLog: AuditLogRecord = {
+      timestamp_label: formatTimestamp(),
+      customer,
+      action: actionTitle,
+      decision_by: operatorName,
+      status: "Rejected",
+      refs,
+      details: reason,
+    }
+
+    setModal("")
+    if (item) {
+      setApprovals((prev) =>
+        prev.map((a) =>
+          a.id === item.id
+            ? { ...a, status: "rejected", rejection_reason: reason }
+            : a,
+        ),
+      )
+    }
+    setAuditLogs((prev) => [newLog, ...prev])
+    setPage("audit")
+    showToast("Rejection recorded in the audit log.")
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      if (item && !item.id.startsWith("app-")) {
+        await supabase
+          .from("approvals")
+          .update({ status: "rejected", rejection_reason: reason })
+          .eq("id", item.id)
+      }
+      await supabase.from("audit_logs").insert([newLog])
+      fetchSupabaseData()
+    }
+  }
+
+  const saveEditBeforeApproval = async (
+    owner: string,
+    dueDate: string,
+    target?: ApprovalRecord | null,
+  ) => {
+    const item = target || activeApproval
+    setModal("")
+    if (item) {
+      setApprovals((prev) =>
+        prev.map((a) =>
+          a.id === item.id
+            ? { ...a, owner, proposed_change: dueDate, submitted_label: "Edited just now" }
+            : a,
+        ),
+      )
+      const supabase = getSupabaseClient()
+      if (supabase && !item.id.startsWith("app-")) {
+        await supabase
+          .from("approvals")
+          .update({
+            owner,
+            proposed_change: dueDate,
+            submitted_label: "Edited just now",
+          })
+          .eq("id", item.id)
+        fetchSupabaseData()
+      }
+    }
+    setPage("approvals")
+    showToast("Changes saved and submitted for approval.")
+  }
+
+  const submitEmail = async (payload: {
+    customer: string
+    recipient: string
+    subject: string
+    body: string
+  }) => {
+    setEmail(false)
+    const newApproval: ApprovalRecord = {
+      id: `app-${Date.now()}`,
+      customer: payload.customer,
+      action: `Send email: "${payload.subject}"`,
+      owner: operatorName,
+      refs: "E1, E2, E3",
+      current_data: `Recipient: ${payload.recipient}`,
+      proposed_change: "Send approved follow-up email",
+      priority_label: "Customer outreach",
+      priority_tone: "amber",
+      description: payload.body.slice(0, 140) + "...",
+      status: "pending",
+      submitted_label: "Just now",
+      recipient_email: payload.recipient,
+      email_subject: payload.subject,
+      email_body: payload.body,
+    }
+    const newLog: AuditLogRecord = {
+      timestamp_label: formatTimestamp(),
+      customer: payload.customer,
+      action: "Draft follow-up email",
+      decision_by: operatorName,
+      status: "Awaiting approval",
+      refs: "E1, E2, E3",
+      details: `To: ${payload.recipient}`,
+    }
+
+    setApprovals((prev) => [newApproval, ...prev])
+    setAuditLogs((prev) => [newLog, ...prev])
+    setPage("approvals")
+    showToast("Email draft submitted for approval. It has not been sent.")
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      const { id: _unused, ...insertableApproval } = newApproval
+      await supabase.from("approvals").insert([insertableApproval])
+      await supabase.from("audit_logs").insert([newLog])
+      fetchSupabaseData()
+    }
+  }
+
+  const handleAddCustomer = async (newAccount: AccountRecord) => {
+    setAddCustomerOpen(false)
+    setAccounts((prev) => [...prev, newAccount])
+    setSelectedAccountName(newAccount.name)
+    showToast(`Added ${newAccount.name} to Customer Accounts.`)
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase.from("accounts").upsert([newAccount], { onConflict: "name" })
+      await supabase.from("audit_logs").insert([
+        {
+          timestamp_label: formatTimestamp(),
+          customer: newAccount.name,
+          action: "Added customer account",
+          decision_by: operatorName,
+          status: "Executed",
+          refs: "CRM",
+          details: `${newAccount.arr} ARR · Owner: ${newAccount.owner}`,
+        },
+      ])
+      fetchSupabaseData()
+    }
+  }
+
+  const handleToggleIntegration = async (item: IntegrationRecord) => {
+    const nextStatus =
+      item.status === "Connected" ? "Demo mode" : "Connected"
+    const nextTone: BadgeTone = nextStatus === "Connected" ? "green" : "amber"
+
+    setIntegrations((prev) =>
+      prev.map((i) =>
+        i.name === item.name
+          ? { ...i, status: nextStatus, tone: nextTone }
+          : i,
+      ),
+    )
+    showToast(`${item.name} (${item.provider}) switched to ${nextStatus}.`)
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase
+        .from("integrations")
+        .update({ status: nextStatus, tone: nextTone })
+        .eq("name", item.name)
+      fetchSupabaseData()
+    }
+  }
+
+  const handleSaveSettings = async (next: WorkspaceSettingsRecord) => {
+    setSettings(next)
+    showToast("Workspace settings saved to Supabase.")
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase
+        .from("workspace_settings")
+        .upsert([{ ...next, id: 1 }], { onConflict: "id" })
+      fetchSupabaseData()
+    }
+  }
+
+  const pendingApprovalsCount = approvals.filter(
+    (a) => a.status === "pending",
+  ).length
+
+  return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <Sidebar page={page} setPage={setPage} />
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        pendingApprovalsCount={pendingApprovalsCount}
+      />
       <div className="lg:pl-64">
-        <Topbar page={page} setPage={setPage} />
+        <Topbar
+          page={page}
+          selectedAccountName={selectedAccount.name}
+          onSearchCustomer={handleSearchCustomer}
+          isSupabaseConnected={isSupabaseConnected}
+          realtimeStatus={realtimeStatus}
+          user={user}
+          onOpenSupabaseModal={() => setSupabaseModalOpen(true)}
+          onOpenAuthModal={() => setAuthModalOpen(true)}
+        />
         <main className="mx-auto max-w-screen-2xl p-5 lg:p-8">
-          {page === "overview" && <Overview setPage={setPage} />}
+          {page === "overview" && (
+            <Overview
+              setPage={setPage}
+              accounts={accounts}
+              pendingApprovalsCount={pendingApprovalsCount}
+              onSelectAccount={handleSelectAccount}
+            />
+          )}
           {page === "account" && (
             <AccountDetail
+              account={selectedAccount}
+              evidenceList={evidenceList}
+              interactionsList={interactionsList}
               setPage={setPage}
-              review={(kind = "") => setModal(kind)}
+              review={(kind = "") => openReviewModal(kind)}
               compose={() => setEmail(true)}
             />
           )}
           {page === "approvals" && (
             <ApprovalCenter
-              review={(kind = "") => setModal(kind)}
+              approvals={approvals}
+              review={(kind = "", approval) => openReviewModal(kind, approval)}
               setPage={setPage}
               execution={execution}
             />
           )}
-          {page === "audit" && (
-            <AuditPage execution={execution} rejected={rejected} />
+          {page === "audit" && <AuditPage auditLogs={auditLogs} />}
+          {page === "integrations" && (
+            <Integrations
+              integrations={integrations}
+              onToggleIntegration={handleToggleIntegration}
+              onOpenSupabaseModal={() => setSupabaseModalOpen(true)}
+              isSupabaseConnected={isSupabaseConnected}
+            />
           )}
-          {page === "integrations" && <Integrations />}
-          {page === "accounts" && <CustomerAccounts setPage={setPage} />}
-          {page === "risks" && <RisksAndOpportunities setPage={setPage} />}
-          {page === "settings" && <SettingsPage />}
+          {page === "accounts" && (
+            <CustomerAccounts
+              accounts={accounts}
+              onSelectAccount={handleSelectAccount}
+              onOpenAddCustomer={() => setAddCustomerOpen(true)}
+            />
+          )}
+          {page === "risks" && (
+            <RisksAndOpportunities
+              items={risksOpportunities}
+              onSelectAccount={handleSelectAccount}
+            />
+          )}
+          {page === "settings" && (
+            <SettingsPage
+              settings={settings}
+              onSaveSettings={handleSaveSettings}
+            />
+          )}
         </main>
       </div>
       <nav
@@ -2146,18 +3312,53 @@ export default function App() {
       {modal && (
         <Modal
           mode={modal}
+          approval={activeApproval}
           close={() => setModal("")}
           approve={approve}
           rejected={reject}
-          compose={() => {
-            setModal("")
-            setPage("approvals")
-            setToast("Changes saved and submitted for approval.")
-          }}
+          saveEdit={saveEditBeforeApproval}
         />
       )}
       {email && (
-        <EmailComposer close={() => setEmail(false)} submit={submitEmail} />
+        <EmailComposer
+          account={selectedAccount}
+          close={() => setEmail(false)}
+          submit={submitEmail}
+        />
+      )}
+      {addCustomerOpen && (
+        <AddCustomerModal
+          close={() => setAddCustomerOpen(false)}
+          onAdd={handleAddCustomer}
+        />
+      )}
+      {supabaseModalOpen && (
+        <SupabaseConfigModal
+          close={() => setSupabaseModalOpen(false)}
+          onConfigured={() => {
+            setSupabaseModalOpen(false)
+            const configured = getSupabaseConfig().isConfigured
+            setIsSupabaseConnected(configured)
+            if (configured) {
+              fetchSupabaseData()
+              showToast("Connected to Supabase! Fetching live tables...")
+            } else {
+              showToast("Switched to local demo data mode.")
+            }
+          }}
+          onSeedDatabase={handleSeedDatabase}
+          isSeeding={isSeeding}
+        />
+      )}
+      {authModalOpen && (
+        <AuthModal
+          user={user}
+          close={() => setAuthModalOpen(false)}
+          onAuthSuccess={(msg) => {
+            setAuthModalOpen(false)
+            showToast(msg)
+          }}
+        />
       )}
       {toast && (
         <div className="fixed bottom-20 right-5 z-50 flex max-w-sm items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl lg:bottom-6">
