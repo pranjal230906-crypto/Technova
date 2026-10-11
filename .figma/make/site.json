@@ -1,0 +1,10 @@
+{
+  "description": "Enables revenue and customer success teams to identify churn risks, uncover growth opportunities, and approve AI-driven actions with clear evidence and audit trails.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
