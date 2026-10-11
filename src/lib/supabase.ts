@@ -65,6 +65,7 @@ export interface ApprovalRecord {
   email_subject?: string
   email_body?: string
   rejection_reason?: string
+  approved_by_user_id?: string | null
 }
 
 export interface AuditLogRecord {
@@ -76,6 +77,7 @@ export interface AuditLogRecord {
   status: "Executed" | "Rejected" | "Awaiting approval"
   refs: string
   details?: string
+  actor_user_id?: string | null
 }
 
 export interface RiskOpportunityRecord {
@@ -117,9 +119,13 @@ export function getSupabaseConfig() {
   const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim()
 
   const storedUrl =
-    typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_URL_KEY)?.trim() : ""
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(STORAGE_URL_KEY)?.trim()
+      : ""
   const storedKey =
-    typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_ANON_KEY)?.trim() : ""
+    typeof window !== "undefined"
+      ? window.localStorage.getItem(STORAGE_ANON_KEY)?.trim()
+      : ""
 
   const url =
     envUrl && !envUrl.includes("your-project-ref")
@@ -146,7 +152,13 @@ export function getSupabaseClient(): SupabaseClient | null {
 
   const key = `${url}::${anonKey}`
   if (!cachedClient || cachedKey !== key) {
-    cachedClient = createClient(url, anonKey)
+    cachedClient = createClient(url, anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
     cachedKey = key
   }
   return cachedClient
@@ -166,6 +178,77 @@ export function clearSupabaseCredentials() {
   window.localStorage.removeItem(STORAGE_ANON_KEY)
   cachedClient = null
   cachedKey = ""
+}
+
+export async function verifySupabaseConnection(
+  customUrl?: string,
+  customAnonKey?: string,
+): Promise<{
+  ok: boolean
+  authOk: boolean
+  tablesReady: boolean
+  message: string
+}> {
+  const config = getSupabaseConfig()
+  const url = (customUrl ?? config.url).trim()
+  const anonKey = (customAnonKey ?? config.anonKey).trim()
+
+  if (!url || !anonKey || !url.startsWith("http")) {
+    return {
+      ok: false,
+      authOk: false,
+      tablesReady: false,
+      message: "Please provide a valid https:// Supabase URL and Anon Key.",
+    }
+  }
+
+  try {
+    const tempClient = createClient(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+
+    const { error: authError } = await tempClient.auth.getSession()
+    if (authError) {
+      return {
+        ok: false,
+        authOk: false,
+        tablesReady: false,
+        message: `Supabase Auth check failed: ${authError.message}`,
+      }
+    }
+
+    const { error: tableError } = await tempClient
+      .from("accounts")
+      .select("name", { count: "exact", head: true })
+
+    if (tableError) {
+      return {
+        ok: true,
+        authOk: true,
+        tablesReady: false,
+        message:
+          "Supabase credentials verified! Next: run supabase/schema.sql in your Supabase SQL Editor to create the tables.",
+      }
+    }
+
+    return {
+      ok: true,
+      authOk: true,
+      tablesReady: true,
+      message:
+        "Supabase Auth & Database tables verified and ready!",
+    }
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      authOk: false,
+      tablesReady: false,
+      message:
+        err instanceof Error
+          ? err.message
+          : "Could not reach Supabase URL. Check the URL and network connection.",
+    }
+  }
 }
 
 export const DEFAULT_ACCOUNTS: AccountRecord[] = [
@@ -504,7 +587,7 @@ export const DEFAULT_INTEGRATIONS: IntegrationRecord[] = [
   },
   {
     name: "Product Usage Data",
-    provider: "RevenuePilot Events",
+    provider: "DealFlow Events",
     description: "Feature adoption and active usage",
     status: "Demo mode",
     tone: "amber",

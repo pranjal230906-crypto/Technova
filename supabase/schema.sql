@@ -1,10 +1,48 @@
 -- ============================================================================
--- RevenuePilot AI (Technova) - Supabase Database Schema, RLS & Seed Data
+-- DealFlow AI (Technova) - Supabase Database Schema, Auth Profiles, RLS & Seed Data
 -- Run this entire script in your Supabase Dashboard -> SQL Editor
 -- ============================================================================
 
 -- Enable UUID generation
 create extension if not exists "pgcrypto";
+
+-- 0. OPERATOR PROFILES TABLE (Linked to Supabase Auth auth.users)
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  full_name text not null default 'RevOps Operator',
+  role text not null default 'RevOps Admin',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Automatically create a profile row when a new user signs up via Supabase Auth
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, email, full_name, role)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), 'RevOps Operator'),
+    coalesce(new.raw_user_meta_data->>'role', 'RevOps Admin')
+  )
+  on conflict (id) do update
+  set
+    email = excluded.email,
+    full_name = coalesce(excluded.full_name, public.profiles.full_name),
+    updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
 
 -- 1. CUSTOMER ACCOUNTS TABLE
 create table if not exists public.accounts (
@@ -76,6 +114,7 @@ create table if not exists public.approvals (
   email_subject text,
   email_body text,
   rejection_reason text,
+  approved_by_user_id uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now()
 );
 
@@ -89,6 +128,7 @@ create table if not exists public.audit_logs (
   status text not null check (status in ('Executed', 'Rejected', 'Awaiting approval')),
   refs text not null,
   details text,
+  actor_user_id uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now()
 );
 
@@ -134,6 +174,7 @@ create table if not exists public.workspace_settings (
 -- Allows both authenticated users and anon demo access so the app works
 -- seamlessly before and after sign-in.
 -- ============================================================================
+alter table public.profiles enable row level security;
 alter table public.accounts enable row level security;
 alter table public.evidence enable row level security;
 alter table public.interactions enable row level security;
@@ -142,6 +183,12 @@ alter table public.audit_logs enable row level security;
 alter table public.risks_opportunities enable row level security;
 alter table public.integrations enable row level security;
 alter table public.workspace_settings enable row level security;
+
+drop policy if exists "Allow public read profiles" on public.profiles;
+create policy "Allow public read profiles" on public.profiles for select using (true);
+
+drop policy if exists "Allow users to update own profile" on public.profiles;
+create policy "Allow users to update own profile" on public.profiles for all using (auth.uid() = id) with check (auth.uid() = id);
 
 drop policy if exists "Allow public access to accounts" on public.accounts;
 create policy "Allow public access to accounts" on public.accounts for all using (true) with check (true);
@@ -270,7 +317,7 @@ values
   ('CRM', 'Salesforce', 'Customer, renewal, and activity records', 'Connected', 'green', 'users'),
   ('Email', 'Google Workspace', 'Thread and response activity', 'Demo mode', 'amber', 'mail'),
   ('Calendar', 'Google Calendar', 'Meetings and follow-up events', 'Connected', 'green', 'calendar'),
-  ('Product Usage Data', 'RevenuePilot Events', 'Feature adoption and active usage', 'Demo mode', 'amber', 'activity')
+  ('Product Usage Data', 'DealFlow Events', 'Feature adoption and active usage', 'Demo mode', 'amber', 'activity')
 on conflict (name) do nothing;
 
 insert into public.workspace_settings (id, workspace_name, timezone, primary_crm, default_task_owner, require_human_approval, record_evidence_refs, notify_account_owners)

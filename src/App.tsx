@@ -13,6 +13,7 @@ import {
   getSupabaseClient,
   getSupabaseConfig,
   saveSupabaseCredentials,
+  verifySupabaseConnection,
   type AccountRecord,
   type ApprovalRecord,
   type AuditLogRecord,
@@ -23,6 +24,26 @@ import {
   type RiskOpportunityRecord,
   type WorkspaceSettingsRecord,
 } from "./lib/supabase"
+import {
+  askGeminiCopilotWithRAG,
+  clearGeminiConfig,
+  GEMINI_MODELS,
+  generateAccountRiskInsight,
+  generateFollowUpEmail,
+  getGeminiConfig,
+  saveGeminiConfig,
+  verifyGeminiConnection,
+  type AccountAIInsight,
+} from "./lib/gemini"
+import {
+  addCustomRagDocument,
+  buildRagCorpus,
+  deleteCustomRagDocument,
+  getCustomRagDocuments,
+  retrieveRelevantChunks,
+  type CustomRagDocument,
+  type RetrievedChunk,
+} from "./lib/rag"
 
 type Page =
   | "overview"
@@ -277,7 +298,7 @@ function Sidebar({
         </div>
         <div>
           <div className="font-bold tracking-tight text-slate-950">
-            RevenuePilot <span className="text-emerald-600">AI</span>
+            DealFlow <span className="text-emerald-600">AI</span>
           </div>
           <div className="text-xs text-slate-500">Autonomous RevOps</div>
         </div>
@@ -320,18 +341,22 @@ function Topbar({
   selectedAccountName,
   onSearchCustomer,
   isSupabaseConnected,
+  isGeminiConnected,
   realtimeStatus,
   user,
   onOpenSupabaseModal,
+  onOpenGeminiModal,
   onOpenAuthModal,
 }: {
   page: Page
   selectedAccountName: string
   onSearchCustomer: (query: string) => void
   isSupabaseConnected: boolean
+  isGeminiConnected: boolean
   realtimeStatus: "connected" | "connecting" | "offline"
   user: User | null
   onOpenSupabaseModal: () => void
+  onOpenGeminiModal: () => void
   onOpenAuthModal: () => void
 }) {
   const titleMap: Record<Page, string> = {
@@ -360,7 +385,7 @@ function Topbar({
   return (
     <header className="sticky top-0 z-20 flex h-20 items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur lg:px-8">
       <div>
-        <p className="text-xs font-medium text-slate-400">RevenuePilot AI</p>
+        <p className="text-xs font-medium text-slate-400">DealFlow AI</p>
         <p className="text-sm font-semibold text-slate-800">{titleMap[page]}</p>
       </div>
       <div className="flex items-center gap-3">
@@ -371,7 +396,7 @@ function Topbar({
             className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"
           />
           <input
-            className="w-64 rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+            className="w-56 rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100"
             placeholder="Search customers..."
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -380,6 +405,14 @@ function Topbar({
             }}
           />
         </label>
+        <button
+          onClick={onOpenGeminiModal}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
+          title="Open DealFlow AI Copilot"
+        >
+          <Icon name="spark" className="h-4 w-4 text-emerald-600" />
+          <span>{isGeminiConnected ? "Ask AI Copilot" : "Connect AI"}</span>
+        </button>
         <button
           onClick={onOpenSupabaseModal}
           className="focus:outline-none"
@@ -394,7 +427,7 @@ function Topbar({
             <span className="hidden xl:inline">
               {isSupabaseConnected
                 ? realtimeStatus === "connected"
-                  ? "Supabase Live (Realtime)"
+                  ? "Supabase Live"
                   : "Supabase Connected"
                 : "Demo Mode (Connect Supabase)"}
             </span>
@@ -402,14 +435,6 @@ function Topbar({
               {isSupabaseConnected ? "Supabase" : "Demo"}
             </span>
           </Badge>
-        </button>
-        <button
-          className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100"
-          aria-label="Notifications"
-          onClick={onOpenSupabaseModal}
-        >
-          <Icon name="bell" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full border-2 border-white bg-red-500"></span>
         </button>
         <button
           onClick={onOpenAuthModal}
@@ -730,6 +755,9 @@ function AccountDetail({
   setPage,
   review,
   compose,
+  isGeminiConnected,
+  onOpenGeminiModal,
+  showToast,
 }: {
   account: AccountRecord
   evidenceList: EvidenceRecord[]
@@ -737,7 +765,42 @@ function AccountDetail({
   setPage: (page: Page) => void
   review: (kind?: string) => void
   compose: () => void
+  isGeminiConnected: boolean
+  onOpenGeminiModal: () => void
+  showToast: (msg: string) => void
 }) {
+  const [aiInsight, setAiInsight] = useState<AccountAIInsight | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+
+  useEffect(() => {
+    setAiInsight(null)
+  }, [account.name])
+
+  const handleRunGeminiAnalysis = async () => {
+    if (!isGeminiConnected) {
+      onOpenGeminiModal()
+      return
+    }
+    setAnalyzing(true)
+    try {
+      const result = await generateAccountRiskInsight(
+        account,
+        evidenceList,
+        interactionsList,
+      )
+      setAiInsight(result)
+      showToast(
+        `DealFlow AI generated fresh risk analysis for ${account.name}.`,
+      )
+    } catch (err: unknown) {
+      showToast(
+        err instanceof Error ? err.message : "AI risk analysis failed.",
+      )
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <button
@@ -766,7 +829,14 @@ function AccountDetail({
             </p>
           </div>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <Button
+            icon="spark"
+            onClick={handleRunGeminiAnalysis}
+            disabled={analyzing}
+          >
+            {analyzing ? "Analyzing Account..." : "Analyze with AI"}
+          </Button>
           <Button icon="mail" onClick={compose}>
             Draft Email
           </Button>
@@ -886,26 +956,46 @@ function AccountDetail({
               ))}
             </div>
             <div className="border-t border-slate-100 bg-slate-50 px-6 py-3 text-xs text-slate-500">
-              All evidence is verified data synced with Supabase. No unsupported
-              or simulated claims are included in this insight.
+              All evidence is verified data synced with your workspace. No
+              unsupported or simulated claims are included in this insight.
             </div>
           </section>
-          <Recommendations review={review} compose={compose} />
+          <Recommendations
+            review={review}
+            compose={compose}
+            aiActions={aiInsight?.recommendedActions}
+          />
         </div>
         <div className="space-y-6 xl:col-span-2">
           <Card className="overflow-hidden border-emerald-200">
-            <div className="flex items-center gap-3 border-b border-emerald-100 bg-emerald-50 p-5">
-              <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-600 text-white">
-                <Icon name="spark" className="h-5 w-5" />
-              </span>
-              <div>
-                <h2 className="font-bold text-slate-900">
-                  AI Risk Explanation
-                </h2>
-                <p className="text-xs text-emerald-700">
-                  Grounded in verified evidence
-                </p>
+            <div className="flex items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50 p-5">
+              <div className="flex items-center gap-3">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-600 text-white">
+                  <Icon name="spark" className="h-5 w-5" />
+                </span>
+                <div>
+                  <h2 className="font-bold text-slate-900">
+                    AI Risk Explanation
+                  </h2>
+                  <p className="text-xs text-emerald-700">
+                    {aiInsight
+                      ? `Grounded in ${aiInsight.retrievedChunks?.length || 6} verified sources`
+                      : "Grounded in verified evidence"}
+                  </p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={handleRunGeminiAnalysis}
+                disabled={analyzing}
+                className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-800 shadow-xs hover:bg-emerald-100 disabled:opacity-50"
+              >
+                {analyzing
+                  ? "Analyzing..."
+                  : aiInsight
+                    ? "Refresh Insight"
+                    : "Generate Insight"}
+              </button>
             </div>
             <div className="p-5">
               <div className="mb-4 flex items-center justify-between">
@@ -913,31 +1003,70 @@ function AccountDetail({
                   Risk level
                 </span>
                 <Badge tone={account.tone}>
-                  {account.tone === "red" ? "High risk" : account.status}
+                  {aiInsight
+                    ? aiInsight.riskLevel
+                    : account.tone === "red"
+                      ? "High risk"
+                      : account.status}
                 </Badge>
               </div>
-              <p className="text-sm leading-6 text-slate-700">
-                {account.name} may be at risk of churn. The renewal is
-                approaching <EvidenceTag id="E1" />, product usage is declining{" "}
-                <EvidenceTag id="E2" />, the customer champion has not replied{" "}
-                <EvidenceTag id="E3" />, and no follow-up has been recorded
-                since the last meeting <EvidenceTag id="E4" />.
-              </p>
+              {aiInsight ? (
+                <p className="text-sm leading-6 text-slate-700">
+                  {aiInsight.summary}
+                </p>
+              ) : (
+                <p className="text-sm leading-6 text-slate-700">
+                  {account.name} may be at risk of churn. The renewal is
+                  approaching <EvidenceTag id="E1" />, product usage is declining{" "}
+                  <EvidenceTag id="E2" />, the customer champion has not replied{" "}
+                  <EvidenceTag id="E3" />, and no follow-up has been recorded
+                  since the last meeting <EvidenceTag id="E4" />.
+                </p>
+              )}
+              {aiInsight?.retrievedChunks &&
+                aiInsight.retrievedChunks.length > 0 && (
+                  <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">
+                      Verified Context Sources
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {aiInsight.retrievedChunks.map((chunk) => (
+                        <span
+                          key={chunk.id}
+                          title={`${chunk.title}\n${chunk.content}`}
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-900"
+                        >
+                          <span className="font-bold text-emerald-700">
+                            [{chunk.citationCode}]
+                          </span>
+                          <span className="max-w-36 truncate">
+                            {chunk.title}
+                          </span>
+                          <span className="text-[10px] text-emerald-600">
+                            {Math.round(chunk.score * 100)}%
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               <div className="my-5 border-t border-slate-100"></div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Why this matters
               </p>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Together, these signals reduce the time available to re-engage
-                the customer before renewal. A prompt, personalized follow-up
-                can clarify their needs and establish a next step.
+                {aiInsight
+                  ? aiInsight.whyItMatters
+                  : "Together, these signals reduce the time available to re-engage the customer before renewal. A prompt, personalized follow-up can clarify their needs and establish a next step."}
               </p>
               <div className="mt-5 rounded-xl bg-slate-50 p-4">
                 <p className="text-xs font-semibold text-slate-500">
                   Suggested next step
                 </p>
                 <p className="mt-1 text-sm font-semibold text-slate-800">
-                  {account.action} for {account.owner}, due tomorrow.
+                  {aiInsight
+                    ? aiInsight.suggestedNextStep
+                    : `${account.action} for ${account.owner}, due tomorrow.`}
                 </p>
               </div>
               <Button
@@ -997,11 +1126,13 @@ function EvidenceTag({ id }: { id: string }) {
 function Recommendations({
   review,
   compose,
+  aiActions,
 }: {
   review: (kind?: string) => void
   compose: () => void
+  aiActions?: AccountAIInsight["recommendedActions"]
 }) {
-  const actions = [
+  const defaultActions: [string, string, string, string][] = [
     [
       "Create a customer follow-up task",
       "Restore momentum before renewal",
@@ -1027,16 +1158,25 @@ function Recommendations({
       "Blocked by approval",
     ],
   ]
+  const actions: [string, string, string, string][] =
+    aiActions && aiActions.length > 0
+      ? aiActions.map((a) => [a.title, a.reason, a.refs, a.status])
+      : defaultActions
+
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between border-b border-slate-100 p-6">
         <div>
           <h2 className="font-bold text-slate-900">AI-Recommended Actions</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Proposed actions require human approval before execution
+            {aiActions
+              ? "Generated live by DealFlow AI · Requires human approval"
+              : "Proposed actions require human approval before execution"}
           </p>
         </div>
-        <Badge tone="amber">4 actions</Badge>
+        <Badge tone={aiActions ? "green" : "amber"}>
+          {actions.length} actions
+        </Badge>
       </div>
       <div className="divide-y divide-slate-100">
         {actions.map(([title, reason, refs, status], index) => (
@@ -1326,11 +1466,15 @@ function Integrations({
   onToggleIntegration,
   onOpenSupabaseModal,
   isSupabaseConnected,
+  onOpenGeminiModal,
+  isGeminiConnected,
 }: {
   integrations: IntegrationRecord[]
   onToggleIntegration: (item: IntegrationRecord) => void
   onOpenSupabaseModal: () => void
   isSupabaseConnected: boolean
+  onOpenGeminiModal: () => void
+  isGeminiConnected: boolean
 }) {
   return (
     <div className="space-y-6">
@@ -1338,29 +1482,54 @@ function Integrations({
         <div>
           <h1 className="text-2xl font-bold text-slate-950">Integrations</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Manage the data sources RevenuePilot uses to create evidence-backed
-            insights.
+            Manage the data sources and AI models DealFlow AI uses to create
+            evidence-backed insights.
           </p>
         </div>
-        <Button tone="primary" icon="plug" onClick={onOpenSupabaseModal}>
-          {isSupabaseConnected
-            ? "Manage Supabase Connection"
-            : "Connect Supabase Database"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button icon="spark" onClick={onOpenGeminiModal}>
+            {isGeminiConnected ? "AI Engine Settings" : "Connect AI Engine"}
+          </Button>
+          <Button tone="primary" icon="plug" onClick={onOpenSupabaseModal}>
+            {isSupabaseConnected
+              ? "Manage Supabase Connection"
+              : "Connect Supabase Database"}
+          </Button>
+        </div>
       </div>
-      <div
-        className={`rounded-xl border p-4 text-sm ${
-          isSupabaseConnected
-            ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-            : "border-amber-200 bg-amber-50 text-amber-800"
-        }`}
-      >
-        <span className="font-bold">
-          {isSupabaseConnected ? "Supabase Backend Connected:" : "Demo environment:"}
-        </span>{" "}
-        {isSupabaseConnected
-          ? "Database tables, Authentication, and Realtime subscriptions are active."
-          : "Simulated integrations are clearly labeled. Click 'Connect Supabase Database' to link your live Supabase project."}
+      <div className="grid gap-4 md:grid-cols-2">
+        <div
+          className={`rounded-xl border p-4 text-sm ${
+            isSupabaseConnected
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+              : "border-amber-200 bg-amber-50 text-amber-800"
+          }`}
+        >
+          <span className="font-bold">
+            {isSupabaseConnected
+              ? "Supabase Backend Connected:"
+              : "Supabase Demo Mode:"}
+          </span>{" "}
+          {isSupabaseConnected
+            ? "Database tables, Authentication, and Realtime subscriptions are active."
+            : "Click 'Connect Supabase Database' to link your live Supabase project."}
+        </div>
+        <div
+          className={`rounded-xl border p-4 text-sm ${
+            isGeminiConnected
+              ? "border-purple-200 bg-purple-50 text-purple-900"
+              : "border-slate-200 bg-white text-slate-700"
+          }`}
+        >
+          <span className="font-bold">
+            {isGeminiConnected
+              ? "DealFlow AI Engine Connected:"
+              : "DealFlow AI Engine Not Configured:"}
+          </span>{" "}
+          {isGeminiConnected
+            ? "Live AI risk explanations, email drafting, and RevOps Copilot are active."
+            : "Click 'Connect AI Engine' to configure your API key for live analysis and email generation."}
+        </div>
       </div>
       <div className="grid gap-5 md:grid-cols-2">
         {integrations.map((item) => (
@@ -1733,7 +1902,7 @@ function SettingsPage({
           <div className="border-b border-slate-100 pb-5">
             <h2 className="font-bold text-slate-900">Workspace details</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Basic information shown across RevenuePilot and persisted in
+              Basic information shown across DealFlow AI and persisted in
               Supabase.
             </p>
           </div>
@@ -1983,7 +2152,7 @@ function Modal({
           ) : (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <p className="text-xs font-semibold text-slate-500">
-                On approval, RevenuePilot will:
+                On approval, DealFlow AI will:
               </p>
               <ol className="mt-3 space-y-2 text-sm text-slate-700">
                 <li className="flex gap-2">
@@ -2046,10 +2215,18 @@ function Modal({
 
 function EmailComposer({
   account,
+  evidenceList,
+  isGeminiConnected,
+  onOpenGeminiModal,
+  showToast,
   close,
   submit,
 }: {
   account: AccountRecord
+  evidenceList: EvidenceRecord[]
+  isGeminiConnected: boolean
+  onOpenGeminiModal: () => void
+  showToast: (msg: string) => void
   close: () => void
   submit: (payload: {
     customer: string
@@ -2067,6 +2244,30 @@ function EmailComposer({
   const [body, setBody] = useState(
     `Hi there,\n\nI hope you're doing well. I wanted to check in following our quarterly review and make sure we are aligned on ${account.name}'s priorities ahead of your upcoming renewal (${account.renewal}).\n\nI noticed product engagement has shifted over the past few weeks (${account.signal}), and I'd value the opportunity to understand what your team needs and where we can help. Would you have 20 minutes this week to reconnect and agree on next steps?\n\nBest,\n${account.owner}`,
   )
+  const [tone, setTone] = useState<"executive" | "value" | "urgent">(
+    "executive",
+  )
+  const [generating, setGenerating] = useState(false)
+
+  const handleGenerateWithGemini = async () => {
+    if (!isGeminiConnected) {
+      onOpenGeminiModal()
+      return
+    }
+    setGenerating(true)
+    try {
+      const draft = await generateFollowUpEmail(account, evidenceList, tone)
+      setSubject(draft.subject)
+      setBody(draft.body)
+      showToast("DealFlow AI drafted a personalized follow-up email.")
+    } catch (err: unknown) {
+      showToast(
+        err instanceof Error ? err.message : "Failed to generate email draft.",
+      )
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   return (
     <div
@@ -2085,7 +2286,7 @@ function EmailComposer({
                 Draft Follow-up Email
               </h2>
               <p className="text-xs text-slate-500">
-                {account.name} · AI-assisted draft
+                {account.name} · Powered by DealFlow AI & Verified Evidence
               </p>
             </div>
           </div>
@@ -2097,6 +2298,32 @@ function EmailComposer({
           </button>
         </div>
         <div className="space-y-4 p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-purple-200 bg-purple-50/70 p-3">
+            <div className="flex items-center gap-2">
+              <Icon name="spark" className="h-4 w-4 text-purple-700" />
+              <span className="text-xs font-semibold text-purple-900">
+                AI Email Writer:
+              </span>
+              <select
+                value={tone}
+                onChange={(e) =>
+                  setTone(e.target.value as "executive" | "value" | "urgent")
+                }
+                className="rounded-lg border border-purple-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700"
+              >
+                <option value="executive">Executive & Consultative</option>
+                <option value="value">Value & ROI Focused</option>
+                <option value="urgent">Direct Renewal Check-in</option>
+              </select>
+            </div>
+            <Button
+              icon="spark"
+              onClick={handleGenerateWithGemini}
+              disabled={generating}
+            >
+              {generating ? "Writing Draft..." : "Generate with AI"}
+            </Button>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="text-xs font-semibold text-slate-600">
               Recipient
@@ -2118,7 +2345,7 @@ function EmailComposer({
           <label className="block text-xs font-semibold text-slate-600">
             Email body
             <textarea
-              rows={10}
+              rows={9}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               className="mt-2 w-full rounded-xl border border-slate-200 p-4 text-sm font-normal leading-6 outline-none focus:border-emerald-500"
@@ -2345,25 +2572,47 @@ function SupabaseConfigModal({
   isSeeding,
 }: {
   close: () => void
-  onConfigured: () => void
+  onConfigured: (statusMessage?: string) => void
   onSeedDatabase: () => void
   isSeeding: boolean
 }) {
   const current = getSupabaseConfig()
   const [url, setUrl] = useState(current.url)
   const [anonKey, setAnonKey] = useState(current.anonKey)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    tablesReady: boolean
+    message: string
+  } | null>(null)
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    const res = await verifySupabaseConnection(url, anonKey)
+    setTestResult(res)
+    setTesting(false)
+  }
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
+    setTesting(true)
+    const res = await verifySupabaseConnection(url, anonKey)
+    setTesting(false)
+    if (!res.ok) {
+      setTestResult(res)
+      return
+    }
     saveSupabaseCredentials(url, anonKey)
-    onConfigured()
+    onConfigured(res.message)
   }
 
   const handleDisconnect = () => {
     clearSupabaseCredentials()
     setUrl("")
     setAnonKey("")
-    onConfigured()
+    setTestResult(null)
+    onConfigured("Switched to local demo data mode.")
   }
 
   return (
@@ -2410,6 +2659,19 @@ function SupabaseConfigModal({
               </li>
             </ol>
           </div>
+          {testResult && (
+            <div
+              className={`rounded-xl border p-3 text-xs leading-5 ${
+                !testResult.ok
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : testResult.tablesReady
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-amber-200 bg-amber-50 text-amber-800"
+              }`}
+            >
+              {testResult.message}
+            </div>
+          )}
           <label className="block text-xs font-semibold text-slate-600">
             Supabase Project URL (VITE_SUPABASE_URL)
             <input
@@ -2422,17 +2684,24 @@ function SupabaseConfigModal({
             />
           </label>
           <label className="block text-xs font-semibold text-slate-600">
-            Supabase Anon / Public Key (VITE_SUPABASE_ANON_KEY)
+            Supabase Anon / Publishable Key (VITE_SUPABASE_ANON_KEY)
             <input
               required
               value={anonKey}
               onChange={(e) => setAnonKey(e.target.value)}
-              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... or sb_publishable_..."
               className="mt-1.5 w-full rounded-lg border border-slate-200 p-3 font-mono text-xs font-normal"
             />
           </label>
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={handleTest}
+                disabled={testing || !url || !anonKey}
+              >
+                {testing ? "Testing..." : "Test Connection"}
+              </Button>
               {current.isConfigured && (
                 <>
                   <Button
@@ -2456,8 +2725,13 @@ function SupabaseConfigModal({
               <Button type="button" onClick={close}>
                 Close
               </Button>
-              <Button type="submit" tone="primary" icon="check">
-                Save & Connect
+              <Button
+                type="submit"
+                tone="primary"
+                icon="check"
+                disabled={testing}
+              >
+                {testing ? "Verifying..." : "Save & Connect"}
               </Button>
             </div>
           </div>
@@ -2476,7 +2750,7 @@ function AuthModal({
   close: () => void
   onAuthSuccess: (message: string) => void
 }) {
-  const [mode, setMode] = useState<"signin" | "signup">("signin")
+  const [mode, setMode] = useState<"signin" | "signup" | "magic">("signin")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [fullName, setFullName] = useState("Jordan Davis")
@@ -2495,25 +2769,52 @@ function AuthModal({
     }
     setLoading(true)
     try {
-      if (mode === "signup") {
-        const { error: signUpError } = await supabase.auth.signUp({
+      if (mode === "magic") {
+        const { error: otpError } = await supabase.auth.signInWithOtp({
+          email,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
+        })
+        if (otpError) throw otpError
+        onAuthSuccess(`Magic sign-in link sent to ${email}! Check your inbox.`)
+      } else if (mode === "signup") {
+        const { data, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            data: { full_name: fullName },
+            emailRedirectTo: window.location.origin,
+            data: { full_name: fullName, role: "RevOps Admin" },
           },
         })
         if (signUpError) throw signUpError
-        onAuthSuccess(
-          "Account created via Supabase Auth! Check your inbox if email confirmation is enabled.",
-        )
+        if (data.user) {
+          await supabase.from("profiles").upsert(
+            [
+              {
+                id: data.user.id,
+                email: data.user.email,
+                full_name: fullName,
+                role: "RevOps Admin",
+              },
+            ],
+            { onConflict: "id" },
+          )
+        }
+        if (data.session) {
+          onAuthSuccess(`Account created and signed in as ${fullName}!`)
+        } else {
+          onAuthSuccess(
+            `Account registered! Please confirm the verification email sent to ${email}.`,
+          )
+        }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
           password,
         })
         if (signInError) throw signInError
-        onAuthSuccess("Signed in with Supabase Auth!")
+        onAuthSuccess("Signed in and authorized via Supabase Auth!")
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Authentication failed")
@@ -2548,7 +2849,7 @@ function AuthModal({
               </h2>
               <p className="text-xs text-slate-500">
                 {user
-                  ? "Authenticated session active"
+                  ? "Authorized Supabase JWT session active"
                   : "Sign in or create an operator account"}
               </p>
             </div>
@@ -2563,9 +2864,12 @@ function AuthModal({
         {user ? (
           <div className="space-y-4 p-6">
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-              <p className="text-xs font-semibold text-emerald-700">
-                Signed in as
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-emerald-700">
+                  Authorized Operator
+                </p>
+                <Badge tone="green">Verified JWT</Badge>
+              </div>
               <p className="mt-1 text-sm font-bold text-slate-900">
                 {user.user_metadata?.full_name || user.email}
               </p>
@@ -2583,7 +2887,7 @@ function AuthModal({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4 p-6">
-            <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+            <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
               <button
                 type="button"
                 onClick={() => setMode("signin")}
@@ -2605,6 +2909,17 @@ function AuthModal({
                 }`}
               >
                 Sign Up
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("magic")}
+                className={`rounded-lg py-2 text-xs font-semibold ${
+                  mode === "magic"
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-600"
+                }`}
+              >
+                Magic Link
               </button>
             </div>
             {error && (
@@ -2630,22 +2945,24 @@ function AuthModal({
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="jordan@revenuepilot.ai"
+                placeholder="jordan@dealflow.ai"
                 className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
               />
             </label>
-            <label className="block text-xs font-semibold text-slate-600">
-              Password
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
-              />
-            </label>
+            {mode !== "magic" && (
+              <label className="block text-xs font-semibold text-slate-600">
+                Password
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+                />
+              </label>
+            )}
             <div className="flex justify-end gap-3 pt-2">
               <Button type="button" onClick={close}>
                 Cancel
@@ -2655,8 +2972,648 @@ function AuthModal({
                   ? "Authenticating..."
                   : mode === "signin"
                     ? "Sign In"
-                    : "Create Account"}
+                    : mode === "signup"
+                      ? "Create Account"
+                      : "Send Magic Link"}
               </Button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function GeminiModal({
+  accounts,
+  selectedAccount,
+  evidenceList,
+  interactionsList,
+  approvals,
+  risksOpportunities,
+  close,
+  onConfigured,
+}: {
+  accounts: AccountRecord[]
+  selectedAccount: AccountRecord
+  evidenceList: EvidenceRecord[]
+  interactionsList: InteractionRecord[]
+  approvals: ApprovalRecord[]
+  risksOpportunities: RiskOpportunityRecord[]
+  close: () => void
+  onConfigured: (message: string) => void
+}) {
+  const current = getGeminiConfig()
+  const [tab, setTab] = useState<"copilot" | "rag" | "settings">(
+    current.isConfigured ? "copilot" : "settings",
+  )
+  const [apiKey, setApiKey] = useState(current.apiKey)
+  const [model, setModel] = useState(current.model)
+  const [testing, setTesting] = useState(false)
+  const [statusMsg, setStatusMsg] = useState<{
+    ok: boolean
+    text: string
+  } | null>(null)
+
+  // RAG Custom Knowledge Base state
+  const [customDocs, setCustomDocs] = useState<CustomRagDocument[]>(() =>
+    getCustomRagDocuments(),
+  )
+  const [docTitle, setDocTitle] = useState("")
+  const [docCustomer, setDocCustomer] = useState(selectedAccount.name)
+  const [docSource, setDocSource] = useState("QBR Transcript / Playbook")
+  const [docContent, setDocContent] = useState("")
+  const [testRagQuery, setTestRagQuery] = useState(
+    `Why is ${selectedAccount.name} at risk before renewal?`,
+  )
+
+  const ragCorpus = useMemo(
+    () =>
+      buildRagCorpus({
+        accounts,
+        evidence: evidenceList,
+        interactions: interactionsList,
+        risksOpportunities,
+        approvals,
+        customDocs,
+      }),
+    [
+      accounts,
+      evidenceList,
+      interactionsList,
+      risksOpportunities,
+      approvals,
+      customDocs,
+    ],
+  )
+
+  const previewRetrievedChunks = useMemo(
+    () =>
+      retrieveRelevantChunks(
+        testRagQuery || selectedAccount.name,
+        ragCorpus,
+        {
+          topK: 5,
+          activeCustomer: selectedAccount.name,
+        },
+      ),
+    [testRagQuery, ragCorpus, selectedAccount.name],
+  )
+
+  // Copilot chat state with RAG retrieved chunks per message
+  const [prompt, setPrompt] = useState("")
+  const [asking, setAsking] = useState(false)
+  const [messages, setMessages] = useState<
+    Array<{
+      role: "user" | "assistant"
+      text: string
+      retrievedChunks?: RetrievedChunk[]
+      totalIndexed?: number
+    }>
+  >([
+    {
+      role: "assistant",
+      text: `Hi! I'm your DealFlow AI Copilot (${ragCorpus.length} indexed records across CRM, Telemetry, Playbooks & Custom Documents). Ask me anything about ${selectedAccount.name} or portfolio health!`,
+    },
+  ])
+
+  const handleAddRagDoc = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!docTitle.trim() || !docContent.trim()) return
+    const updated = addCustomRagDocument({
+      title: docTitle,
+      customer: docCustomer,
+      source: docSource,
+      content: docContent,
+    })
+    setCustomDocs(updated)
+    setDocTitle("")
+    setDocContent("")
+    onConfigured(
+      `Added "${docTitle.trim()}" to Knowledge Base (${updated.length} custom documents).`,
+    )
+  }
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : ""
+      if (text) {
+        if (!docTitle.trim()) {
+          setDocTitle(file.name.replace(/\.[^.]+$/, ""))
+        }
+        setDocSource(`Uploaded File (${file.name})`)
+        setDocContent(text.slice(0, 6000))
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  const handleDeleteRagDoc = (id: string) => {
+    const updated = deleteCustomRagDocument(id)
+    setCustomDocs(updated)
+  }
+
+  const handleTest = async () => {
+    setTesting(true)
+    setStatusMsg(null)
+    const res = await verifyGeminiConnection(apiKey, model)
+    if (res.ok) {
+      const finalModel = res.activeModel || model
+      setModel(finalModel)
+      saveGeminiConfig(apiKey, finalModel)
+      onConfigured(res.message)
+    }
+    setStatusMsg({ ok: res.ok, text: res.message })
+    setTesting(false)
+  }
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setTesting(true)
+    const res = await verifyGeminiConnection(apiKey, model)
+    setTesting(false)
+    if (!res.ok) {
+      setStatusMsg({ ok: false, text: res.message })
+      return
+    }
+    const finalModel = res.activeModel || model
+    setModel(finalModel)
+    saveGeminiConfig(apiKey, finalModel)
+    setStatusMsg({ ok: true, text: res.message })
+    onConfigured(res.message)
+    setTab("copilot")
+  }
+
+  const handleDisconnect = () => {
+    clearGeminiConfig()
+    setApiKey("")
+    setStatusMsg(null)
+    onConfigured("Disconnected AI Engine API key.")
+  }
+
+  const sendCopilotPrompt = async (customPrompt?: string) => {
+    const query = (customPrompt ?? prompt).trim()
+    if (!query || asking) return
+    const cfg = getGeminiConfig()
+    const activeKey = apiKey.trim() || cfg.apiKey
+    const activeModel = model || cfg.model
+    if (!activeKey) {
+      setTab("settings")
+      setStatusMsg({
+        ok: false,
+        text: "Please enter and save your AI API key first.",
+      })
+      return
+    }
+    if (apiKey.trim() && !cfg.isConfigured) {
+      saveGeminiConfig(activeKey, activeModel)
+    }
+    setPrompt("")
+    setMessages((prev) => [...prev, { role: "user", text: query }])
+    setAsking(true)
+    try {
+      const ragRes = await askGeminiCopilotWithRAG(
+        query,
+        {
+          accounts,
+          evidence: evidenceList,
+          interactions: interactionsList,
+          approvals,
+          risksOpportunities,
+          customDocs,
+          activeCustomer: selectedAccount.name,
+        },
+        {
+          customApiKey: activeKey,
+          customModel: activeModel,
+          topK: 6,
+        },
+      )
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: ragRes.answer,
+          retrievedChunks: ragRes.retrievedChunks,
+          totalIndexed: ragRes.totalIndexedChunks,
+        },
+      ])
+    } catch (err: unknown) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text:
+            err instanceof Error
+              ? `Error: ${err.message}`
+              : "Failed to reach DealFlow AI Engine.",
+        },
+      ])
+    } finally {
+      setAsking(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-5">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-purple-600 text-white">
+              <Icon name="spark" />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-bold text-slate-950">
+                  DealFlow AI Copilot & Knowledge Base
+                </h2>
+                <Badge tone="green">{ragCorpus.length} Indexed Records</Badge>
+              </div>
+              <p className="text-xs text-slate-500">
+                Real-time intelligence grounded in CRM, Telemetry & Playbooks
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-xl bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => setTab("copilot")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                  tab === "copilot"
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-600"
+                }`}
+              >
+                AI Copilot
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("rag")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                  tab === "rag"
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-600"
+                }`}
+              >
+                Knowledge Base ({customDocs.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("settings")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                  tab === "settings"
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-600"
+                }`}
+              >
+                Engine Settings
+              </button>
+            </div>
+            <button
+              onClick={close}
+              className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"
+            >
+              <Icon name="close" />
+            </button>
+          </div>
+        </div>
+
+        {tab === "copilot" ? (
+          <div className="p-6">
+            <div className="mb-3 flex flex-wrap gap-2">
+              {[
+                `Why is ${selectedAccount.name} at risk and what did they say in the QBR?`,
+                "Which accounts should we prioritize for renewal or expansion?",
+                `What does our RevOps playbook recommend for ${selectedAccount.name}?`,
+              ].map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => sendCopilotPrompt(q)}
+                  className="rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-medium text-purple-800 hover:bg-purple-100"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+            <div className="h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
+              {messages.map((m, idx) => (
+                <div
+                  key={idx}
+                  className={`flex flex-col ${
+                    m.role === "user" ? "items-end" : "items-start"
+                  }`}
+                >
+                  <div
+                    className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-xs leading-5 ${
+                      m.role === "user"
+                        ? "bg-slate-900 text-white"
+                        : "border border-slate-200 bg-white text-slate-800 shadow-2xs"
+                    }`}
+                  >
+                    {m.text}
+                  </div>
+                  {m.retrievedChunks && m.retrievedChunks.length > 0 && (
+                    <div className="mt-1.5 max-w-[88%] rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5">
+                      <p className="text-[11px] font-semibold text-emerald-800">
+                        Verified Sources Used ({m.retrievedChunks.length} of{" "}
+                        {m.totalIndexed || ragCorpus.length} records):
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {m.retrievedChunks.map((chunk) => (
+                          <span
+                            key={chunk.id}
+                            title={`${chunk.title}\n${chunk.content}`}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-0.5 text-[11px] text-slate-700"
+                          >
+                            <span className="font-bold text-emerald-700">
+                              [{chunk.citationCode}]
+                            </span>
+                            <span className="max-w-36 truncate">
+                              {chunk.title}
+                            </span>
+                            <span className="font-semibold text-emerald-600">
+                              {Math.round(chunk.score * 100)}%
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {asking && (
+                <div className="text-xs font-medium text-purple-700">
+                  Analyzing verified account intelligence & generating response...
+                </div>
+              )}
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                sendCopilotPrompt()
+              }}
+              className="mt-4 flex gap-2"
+            >
+              <input
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder={`Ask Copilot about ${selectedAccount.name}, QBR notes, or playbooks...`}
+                className="flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-purple-500"
+              />
+              <Button
+                type="submit"
+                tone="primary"
+                icon="spark"
+                disabled={asking}
+              >
+                {asking ? "Analyzing..." : "Ask Copilot"}
+              </Button>
+            </form>
+          </div>
+        ) : tab === "rag" ? (
+          <div className="max-h-[75vh] space-y-5 overflow-y-auto p-6">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[11px] font-semibold text-slate-500">
+                  Total Indexed Records
+                </p>
+                <p className="mt-1 text-xl font-bold text-slate-900">
+                  {ragCorpus.length}
+                </p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-[11px] font-semibold text-emerald-700">
+                  Evidence & CRM
+                </p>
+                <p className="mt-1 text-xl font-bold text-emerald-900">
+                  {accounts.length + evidenceList.length + interactionsList.length}
+                </p>
+              </div>
+              <div className="rounded-xl border border-purple-200 bg-purple-50 p-3">
+                <p className="text-[11px] font-semibold text-purple-700">
+                  Custom Documents
+                </p>
+                <p className="mt-1 text-xl font-bold text-purple-900">
+                  {customDocs.length}
+                </p>
+              </div>
+              <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3">
+                <p className="text-[11px] font-semibold text-cyan-700">
+                  Intelligence Status
+                </p>
+                <p className="mt-1 text-xs font-bold text-cyan-900">
+                  Real-Time Synced
+                </p>
+              </div>
+            </div>
+
+            <form
+              onSubmit={handleAddRagDoc}
+              className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-bold text-slate-900">
+                  Add New Document / Call Transcript to Knowledge Base
+                </p>
+                <label className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                  Upload .txt / .md / .csv
+                  <input
+                    type="file"
+                    accept=".txt,.md,.csv,.json"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <input
+                  required
+                  value={docTitle}
+                  onChange={(e) => setDocTitle(e.target.value)}
+                  placeholder="Document Title (e.g. Q2 Pricing Notes)"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+                />
+                <select
+                  value={docCustomer}
+                  onChange={(e) => setDocCustomer(e.target.value)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+                >
+                  <option value="All Accounts">All Accounts (Global SOP)</option>
+                  {accounts.map((a) => (
+                    <option key={a.name} value={a.name}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={docSource}
+                  onChange={(e) => setDocSource(e.target.value)}
+                  placeholder="Source (e.g. Call Transcript)"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+                />
+              </div>
+              <textarea
+                required
+                rows={3}
+                value={docContent}
+                onChange={(e) => setDocContent(e.target.value)}
+                placeholder="Paste customer meeting notes, QBR transcript, contract terms, or RevOps playbook content..."
+                className="w-full rounded-lg border border-slate-200 bg-white p-3 text-xs leading-5"
+              />
+              <div className="flex justify-end">
+                <Button type="submit" tone="primary" icon="spark">
+                  Add to Knowledge Base
+                </Button>
+              </div>
+            </form>
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-bold text-slate-900">
+                  Knowledge Base Search Preview (Top Matches)
+                </p>
+                <span className="text-[11px] text-slate-500">
+                  Context Relevance Ranking
+                </span>
+              </div>
+              <input
+                value={testRagQuery}
+                onChange={(e) => setTestRagQuery(e.target.value)}
+                placeholder="Search indexed account notes, transcripts, and playbooks..."
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
+              />
+              <div className="space-y-2">
+                {previewRetrievedChunks.map((chunk) => (
+                  <div
+                    key={chunk.id}
+                    className="rounded-xl border border-slate-200 bg-white p-3 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 font-bold text-emerald-800">
+                          [{chunk.citationCode}]
+                        </span>
+                        <span className="font-semibold text-slate-900">
+                          {chunk.title}
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          · {chunk.source}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge tone="green">
+                          {Math.round(chunk.score * 100)}% relevance
+                        </Badge>
+                        {chunk.category === "custom_doc" && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleDeleteRagDoc(
+                                chunk.id.replace(/-part-\d+$/, ""),
+                              )
+                            }
+                            className="text-[11px] font-semibold text-red-600 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-1.5 leading-5 text-slate-600">
+                      {chunk.content}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSave} className="space-y-4 p-6">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-600">
+              <p className="font-semibold text-slate-800">
+                DealFlow AI Engine Configuration:
+              </p>
+              <p className="mt-1">
+                Enter your AI Engine API key and select the intelligence model tier to power live account diagnostics, Copilot responses, and automated outreach drafting.
+              </p>
+            </div>
+            {statusMsg && (
+              <div
+                className={`rounded-xl border p-3 text-xs leading-5 ${
+                  statusMsg.ok
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}
+              >
+                {statusMsg.text}
+              </div>
+            )}
+            <label className="block text-xs font-semibold text-slate-600">
+              AI Engine API Key
+              <input
+                type="password"
+                required
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Enter your API key..."
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-3 font-mono text-xs font-normal"
+              />
+            </label>
+            <label className="block text-xs font-semibold text-slate-600">
+              Intelligence Model Tier
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm font-normal"
+              >
+                {GEMINI_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={testing || !apiKey}
+                >
+                  {testing ? "Testing..." : "Test Connection"}
+                </Button>
+                {current.isConfigured && (
+                  <Button
+                    type="button"
+                    tone="danger"
+                    onClick={handleDisconnect}
+                  >
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" onClick={close}>
+                  Close
+                </Button>
+                <Button
+                  type="submit"
+                  tone="primary"
+                  icon="check"
+                  disabled={testing || !apiKey}
+                >
+                  {testing ? "Verifying..." : "Save & Activate AI"}
+                </Button>
+              </div>
             </div>
           </form>
         )}
@@ -2699,13 +3656,17 @@ export default function App() {
   const [addCustomerOpen, setAddCustomerOpen] = useState(false)
   const [supabaseModalOpen, setSupabaseModalOpen] = useState(false)
   const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [geminiModalOpen, setGeminiModalOpen] = useState(false)
   const [execution, setExecution] = useState(false)
   const [toast, setToast] = useState("")
   const [isSeeding, setIsSeeding] = useState(false)
 
-  // Supabase Connection & Auth State
+  // Supabase Connection, Auth & Gemini AI State
   const [isSupabaseConnected, setIsSupabaseConnected] = useState(
     () => getSupabaseConfig().isConfigured,
+  )
+  const [isGeminiConnected, setIsGeminiConnected] = useState(
+    () => getGeminiConfig().isConfigured,
   )
   const [realtimeStatus, setRealtimeStatus] = useState<
     "connected" | "connecting" | "offline"
@@ -2982,6 +3943,7 @@ export default function App() {
       status: "Executed",
       refs,
       details: `Task assigned to ${item?.owner || selectedAccount.owner}`,
+      actor_user_id: user?.id ?? null,
     }
 
     setModal("")
@@ -3011,8 +3973,19 @@ export default function App() {
       if (item && !item.id.startsWith("app-")) {
         await supabase
           .from("approvals")
-          .update({ status: "approved" })
+          .update({
+            status: "approved",
+            approved_by_user_id: user?.id ?? null,
+          })
           .eq("id", item.id)
+      } else {
+        await supabase
+          .from("approvals")
+          .update({
+            status: "approved",
+            approved_by_user_id: user?.id ?? null,
+          })
+          .match({ customer, action: actionTitle })
       }
       await supabase.from("audit_logs").insert([newLog])
       await supabase
@@ -3043,6 +4016,7 @@ export default function App() {
       status: "Rejected",
       refs,
       details: reason,
+      actor_user_id: user?.id ?? null,
     }
 
     setModal("")
@@ -3064,8 +4038,21 @@ export default function App() {
       if (item && !item.id.startsWith("app-")) {
         await supabase
           .from("approvals")
-          .update({ status: "rejected", rejection_reason: reason })
+          .update({
+            status: "rejected",
+            rejection_reason: reason,
+            approved_by_user_id: user?.id ?? null,
+          })
           .eq("id", item.id)
+      } else {
+        await supabase
+          .from("approvals")
+          .update({
+            status: "rejected",
+            rejection_reason: reason,
+            approved_by_user_id: user?.id ?? null,
+          })
+          .match({ customer, action: actionTitle })
       }
       await supabase.from("audit_logs").insert([newLog])
       fetchSupabaseData()
@@ -3088,15 +4075,26 @@ export default function App() {
         ),
       )
       const supabase = getSupabaseClient()
-      if (supabase && !item.id.startsWith("app-")) {
-        await supabase
-          .from("approvals")
-          .update({
-            owner,
-            proposed_change: dueDate,
-            submitted_label: "Edited just now",
-          })
-          .eq("id", item.id)
+      if (supabase) {
+        if (!item.id.startsWith("app-")) {
+          await supabase
+            .from("approvals")
+            .update({
+              owner,
+              proposed_change: dueDate,
+              submitted_label: "Edited just now",
+            })
+            .eq("id", item.id)
+        } else {
+          await supabase
+            .from("approvals")
+            .update({
+              owner,
+              proposed_change: dueDate,
+              submitted_label: "Edited just now",
+            })
+            .match({ customer: item.customer, action: item.action })
+        }
         fetchSupabaseData()
       }
     }
@@ -3230,9 +4228,11 @@ export default function App() {
           selectedAccountName={selectedAccount.name}
           onSearchCustomer={handleSearchCustomer}
           isSupabaseConnected={isSupabaseConnected}
+          isGeminiConnected={isGeminiConnected}
           realtimeStatus={realtimeStatus}
           user={user}
           onOpenSupabaseModal={() => setSupabaseModalOpen(true)}
+          onOpenGeminiModal={() => setGeminiModalOpen(true)}
           onOpenAuthModal={() => setAuthModalOpen(true)}
         />
         <main className="mx-auto max-w-screen-2xl p-5 lg:p-8">
@@ -3252,6 +4252,9 @@ export default function App() {
               setPage={setPage}
               review={(kind = "") => openReviewModal(kind)}
               compose={() => setEmail(true)}
+              isGeminiConnected={isGeminiConnected}
+              onOpenGeminiModal={() => setGeminiModalOpen(true)}
+              showToast={showToast}
             />
           )}
           {page === "approvals" && (
@@ -3269,6 +4272,8 @@ export default function App() {
               onToggleIntegration={handleToggleIntegration}
               onOpenSupabaseModal={() => setSupabaseModalOpen(true)}
               isSupabaseConnected={isSupabaseConnected}
+              onOpenGeminiModal={() => setGeminiModalOpen(true)}
+              isGeminiConnected={isGeminiConnected}
             />
           )}
           {page === "accounts" && (
@@ -3322,6 +4327,10 @@ export default function App() {
       {email && (
         <EmailComposer
           account={selectedAccount}
+          evidenceList={evidenceList}
+          isGeminiConnected={isGeminiConnected}
+          onOpenGeminiModal={() => setGeminiModalOpen(true)}
+          showToast={showToast}
           close={() => setEmail(false)}
           submit={submitEmail}
         />
@@ -3335,19 +4344,36 @@ export default function App() {
       {supabaseModalOpen && (
         <SupabaseConfigModal
           close={() => setSupabaseModalOpen(false)}
-          onConfigured={() => {
+          onConfigured={(statusMsg) => {
             setSupabaseModalOpen(false)
             const configured = getSupabaseConfig().isConfigured
             setIsSupabaseConnected(configured)
             if (configured) {
               fetchSupabaseData()
-              showToast("Connected to Supabase! Fetching live tables...")
+              showToast(
+                statusMsg || "Connected to Supabase! Fetching live tables...",
+              )
             } else {
-              showToast("Switched to local demo data mode.")
+              showToast(statusMsg || "Switched to local demo data mode.")
             }
           }}
           onSeedDatabase={handleSeedDatabase}
           isSeeding={isSeeding}
+        />
+      )}
+      {geminiModalOpen && (
+        <GeminiModal
+          accounts={accounts}
+          selectedAccount={selectedAccount}
+          evidenceList={evidenceList}
+          interactionsList={interactionsList}
+          approvals={approvals}
+          risksOpportunities={risksOpportunities}
+          close={() => setGeminiModalOpen(false)}
+          onConfigured={(msg) => {
+            setIsGeminiConnected(getGeminiConfig().isConfigured)
+            showToast(msg)
+          }}
         />
       )}
       {authModalOpen && (
