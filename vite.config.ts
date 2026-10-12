@@ -4,7 +4,27 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
 import siteConfiguration from './.figma/make/site.json' with { type: 'json' }
+import { handleMcpApiRequest } from './server/apiRouter.ts'
 
+function dealflowMcpBackendPlugin(): Plugin {
+  return {
+    name: 'dealflow-mcp-backend-gateway',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url?.startsWith('/api/')) return next()
+        const handled = await handleMcpApiRequest(req, res)
+        if (!handled) next()
+      })
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url?.startsWith('/api/')) return next()
+        const handled = await handleMcpApiRequest(req, res)
+        if (!handled) next()
+      })
+    },
+  }
+}
 
 // Vite config — https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -18,8 +38,9 @@ export default defineConfig(({ mode }) => {
       minify: !emitSourcemaps,
     },
     plugins: [
-react(),
+      react(),
       tailwindcss(),
+      dealflowMcpBackendPlugin(),
       figmaSiteConfiguration(siteConfiguration),
       figmaErrorOverlayReplay(),
       figmaReactRefreshBoundaryFallback(),
@@ -37,7 +58,7 @@ react(),
       watch: {
         ignored: [
           '**/.figma/**',
-],
+        ],
       },
     },
     preview: {

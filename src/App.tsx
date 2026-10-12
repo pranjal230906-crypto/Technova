@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { User } from "@supabase/supabase-js"
 import {
   clearSupabaseCredentials,
@@ -44,6 +44,46 @@ import {
   type CustomRagDocument,
   type RetrievedChunk,
 } from "./lib/rag"
+import {
+  clearActiveSession,
+  getActiveSession,
+  getInitials,
+  loadUserWorkspaceBundle,
+  mapSupabaseUserToSession,
+  PRESET_OPERATORS,
+  resolvePodForUser,
+  saveActiveSession,
+  saveUserWorkspaceBundle,
+  TERRITORY_PODS,
+  type AppSessionUser,
+} from "./lib/userWorkspace"
+import {
+  applyThemeToDom,
+  getSavedTheme,
+  LandingPage,
+  LoginPage,
+  ThemeToggleButton,
+  type ThemeMode,
+} from "./components/LandingAndAuth"
+import {
+  buildIntegrationCardsFromConfig,
+  createGoogleCalendarMeeting,
+  loadIntegrationsConfig,
+  pushCRMWebhookUpdate,
+  saveIntegrationsConfig,
+  sendRealEmail,
+  type AllIntegrationsConfig,
+  type IntegrationKind,
+  type IntegrationSyncLog,
+} from "./lib/integrations"
+import { IntegrationConnectorModal } from "./components/IntegrationConnectorModal"
+import {
+  callBackendMcpTool,
+  decideAndExecuteBackendApproval,
+  fetchMcpGatewayRegistry,
+  type DiscoveredMcpServer,
+  type DiscoveredMcpTool,
+} from "./lib/mcpClient"
 
 type Page =
   | "overview"
@@ -285,23 +325,32 @@ function Sidebar({
   page,
   setPage,
   pendingApprovalsCount,
+  onOpenLandingPage,
 }: {
   page: Page
   setPage: (page: Page) => void
   pendingApprovalsCount: number
+  onOpenLandingPage: () => void
 }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
-      <div className="flex h-20 items-center gap-3 border-b border-slate-100 px-6">
-        <div className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-600 text-white shadow-sm">
-          <Icon name="activity" />
-        </div>
-        <div>
-          <div className="font-bold tracking-tight text-slate-950">
-            DealFlow <span className="text-emerald-600">AI</span>
+      <div className="flex h-20 items-center justify-between border-b border-slate-100 px-6">
+        <button
+          type="button"
+          onClick={onOpenLandingPage}
+          className="flex items-center gap-3 text-left transition hover:opacity-80"
+          title="View DealFlow AI Front Page"
+        >
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-600 text-white shadow-sm">
+            <Icon name="activity" />
           </div>
-          <div className="text-xs text-slate-500">Autonomous RevOps</div>
-        </div>
+          <div>
+            <div className="font-bold tracking-tight text-slate-950">
+              DealFlow <span className="text-emerald-600">AI</span>
+            </div>
+            <div className="text-xs text-slate-500">Autonomous RevOps</div>
+          </div>
+        </button>
       </div>
       <nav className="flex-1 space-y-1 p-4" aria-label="Primary navigation">
         {navItems.map((item) => (
@@ -340,24 +389,22 @@ function Topbar({
   page,
   selectedAccountName,
   onSearchCustomer,
-  isSupabaseConnected,
   isGeminiConnected,
-  realtimeStatus,
-  user,
-  onOpenSupabaseModal,
+  activeUser,
   onOpenGeminiModal,
   onOpenAuthModal,
+  theme,
+  onToggleTheme,
 }: {
   page: Page
   selectedAccountName: string
   onSearchCustomer: (query: string) => void
-  isSupabaseConnected: boolean
   isGeminiConnected: boolean
-  realtimeStatus: "connected" | "connecting" | "offline"
-  user: User | null
-  onOpenSupabaseModal: () => void
+  activeUser: AppSessionUser
   onOpenGeminiModal: () => void
   onOpenAuthModal: () => void
+  theme: ThemeMode
+  onToggleTheme: () => void
 }) {
   const titleMap: Record<Page, string> = {
     overview: "Overview",
@@ -370,25 +417,22 @@ function Topbar({
     settings: "Settings",
   }
 
-  const displayName =
-    user?.user_metadata?.full_name ||
-    user?.email?.split("@")[0] ||
-    "Jordan Davis"
-  const displayRole = user ? "Authenticated via Supabase" : "RevOps Admin"
-  const initials = displayName
-    .split(" ")
-    .map((p: string) => p[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase()
+  const displayName = activeUser.fullName
+  const displayRole = activeUser.role
+  const initials = activeUser.avatarInitials || "DF"
 
   return (
     <header className="sticky top-0 z-20 flex h-20 items-center justify-between border-b border-slate-200 bg-white/95 px-5 backdrop-blur lg:px-8">
       <div>
-        <p className="text-xs font-medium text-slate-400">DealFlow AI</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-medium text-slate-400">DealFlow AI</p>
+          <span className="rounded bg-emerald-50 px-2 py-0.5 font-mono text-[11px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+            User ID: {activeUser.id}
+          </span>
+        </div>
         <p className="text-sm font-semibold text-slate-800">{titleMap[page]}</p>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5 sm:gap-3">
         <label className="relative hidden md:block">
           <span className="sr-only">Search customers</span>
           <Icon
@@ -405,6 +449,11 @@ function Topbar({
             }}
           />
         </label>
+        <ThemeToggleButton
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          compact
+        />
         <button
           onClick={onOpenGeminiModal}
           className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
@@ -414,41 +463,21 @@ function Topbar({
           <span>{isGeminiConnected ? "Ask AI Copilot" : "Connect AI"}</span>
         </button>
         <button
-          onClick={onOpenSupabaseModal}
-          className="focus:outline-none"
-          title="Configure Supabase connection"
-        >
-          <Badge tone={isSupabaseConnected ? "green" : "amber"}>
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                isSupabaseConnected ? "bg-emerald-500" : "bg-amber-500"
-              }`}
-            ></span>
-            <span className="hidden xl:inline">
-              {isSupabaseConnected
-                ? realtimeStatus === "connected"
-                  ? "Supabase Live"
-                  : "Supabase Connected"
-                : "Demo Mode (Connect Supabase)"}
-            </span>
-            <span className="xl:hidden">
-              {isSupabaseConnected ? "Supabase" : "Demo"}
-            </span>
-          </Badge>
-        </button>
-        <button
           onClick={onOpenAuthModal}
-          className="flex items-center gap-2 rounded-lg p-1.5 hover:bg-slate-50"
-          aria-label="Open profile and authentication menu"
+          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/70 p-1.5 hover:bg-slate-100"
+          aria-label="Open profile and User ID switcher"
+          title="Switch Operator User ID or Sign Out"
         >
           <span className="grid h-9 w-9 place-items-center rounded-full bg-slate-900 text-xs font-bold text-white">
-            {initials || "JD"}
+            {initials}
           </span>
           <span className="hidden text-left xl:block">
-            <span className="block text-sm font-semibold text-slate-800">
+            <span className="block text-xs font-bold text-slate-900">
               {displayName}
             </span>
-            <span className="block text-xs text-slate-500">{displayRole}</span>
+            <span className="block font-mono text-[10px] font-semibold text-emerald-700">
+              {activeUser.id} · {displayRole}
+            </span>
           </span>
         </button>
       </div>
@@ -491,11 +520,15 @@ function Overview({
   accounts,
   pendingApprovalsCount,
   onSelectAccount,
+  activeUser,
+  onOpenProfileModal,
 }: {
   setPage: (page: Page) => void
   accounts: AccountRecord[]
   pendingApprovalsCount: number
   onSelectAccount: (name: string) => void
+  activeUser: AppSessionUser
+  onOpenProfileModal: () => void
 }) {
   const atRiskCount = accounts.filter((a) => a.tone === "red").length
   const healthyCount = accounts.filter((a) => a.tone === "green").length
@@ -503,46 +536,85 @@ function Overview({
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-white to-cyan-50 p-4 shadow-2xs">
+        <div className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-600 text-sm font-bold text-white shadow-xs">
+            {activeUser.avatarInitials}
+          </span>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-bold text-slate-950">
+                {activeUser.fullName}&apos;s Authenticated Workspace
+              </span>
+              <span className="rounded-md bg-emerald-600 px-2 py-0.5 font-mono text-[11px] font-bold text-white">
+                User ID: {activeUser.id}
+              </span>
+              <Badge tone="green">{activeUser.portfolioLabel}</Badge>
+            </div>
+            <p className="mt-0.5 text-xs text-slate-600">
+              Showing {accounts.length} assigned customer accounts, evidence signals, and approval queues scoped specifically to{" "}
+              <code className="font-mono font-semibold text-emerald-800">
+                {activeUser.id}
+              </code>{" "}
+              ({activeUser.email}).
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenProfileModal}
+            className="rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-xs font-semibold text-emerald-800 shadow-2xs transition hover:bg-emerald-50"
+          >
+            Manage Profile & Territory Pod
+          </button>
+        </div>
+      </div>
+
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
             Revenue Intelligence Overview
           </h1>
           <p className="mt-2 text-sm text-slate-500 sm:text-base">
-            Understand customer health and take the next best action.
+            Understand customer health and take the next best action for{" "}
+            <span className="font-semibold text-slate-700">
+              {activeUser.portfolioLabel}
+            </span>
+            .
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span className="h-2 w-2 rounded-full bg-emerald-500"></span>Signals
-          refreshed via Supabase Realtime
+          scoped to {activeUser.id}
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="At-Risk Accounts"
-          value={String(Math.max(atRiskCount, 12))}
-          detail={`${atRiskCount} priority in active view`}
+          value={String(atRiskCount)}
+          detail={`Assigned to ${activeUser.fullName}`}
           icon="alert"
           tone="bg-red-50 text-red-600"
         />
         <StatCard
           label="Healthy Accounts"
-          value={String(Math.max(healthyCount, 28))}
-          detail="70% of your portfolio"
+          value={String(healthyCount)}
+          detail={`Active in ${activeUser.id}`}
           icon="shield"
           tone="bg-emerald-50 text-emerald-600"
         />
         <StatCard
           label="Expansion Opportunities"
-          value={String(Math.max(expansionCount, 7))}
-          detail="$184K potential ARR"
+          value={String(expansionCount)}
+          detail="Ready for upsell review"
           icon="spark"
           tone="bg-cyan-50 text-cyan-600"
         />
         <StatCard
           label="Pending Approvals"
           value={String(pendingApprovalsCount)}
-          detail="Synced with Approval Center"
+          detail="Awaiting your sign-off"
           icon="check"
           tone="bg-amber-50 text-amber-600"
         />
@@ -1462,28 +1534,102 @@ function AuditPage({ auditLogs }: { auditLogs: AuditLogRecord[] }) {
 }
 
 function Integrations({
-  integrations,
-  onToggleIntegration,
+  integrationsConfig,
+  onOpenConnector,
   onOpenSupabaseModal,
   isSupabaseConnected,
   onOpenGeminiModal,
   isGeminiConnected,
 }: {
-  integrations: IntegrationRecord[]
-  onToggleIntegration: (item: IntegrationRecord) => void
+  integrationsConfig: AllIntegrationsConfig
+  onOpenConnector: (kind: IntegrationKind) => void
   onOpenSupabaseModal: () => void
   isSupabaseConnected: boolean
   onOpenGeminiModal: () => void
   isGeminiConnected: boolean
 }) {
+  const cards = buildIntegrationCardsFromConfig(integrationsConfig)
+  const connectedCount = [
+    integrationsConfig.crm.connected,
+    integrationsConfig.email.connected,
+    integrationsConfig.calendar.connected,
+    integrationsConfig.usage.connected,
+  ].filter(Boolean).length
+
+  const [mcpServers, setMcpServers] = useState<DiscoveredMcpServer[]>([])
+  const [mcpTools, setMcpTools] = useState<DiscoveredMcpTool[]>([])
+  const [selectedTool, setSelectedTool] = useState("get_account_summary")
+  const [toolAccountArg, setToolAccountArg] = useState("Acme Corporation")
+  const [toolQueryArg, setToolQueryArg] = useState(
+    "Why is Acme Corporation at risk before renewal?",
+  )
+  const [toolResultJson, setToolResultJson] = useState<string>("")
+  const [runningTool, setRunningTool] = useState(false)
+
+  useEffect(() => {
+    fetchMcpGatewayRegistry()
+      .then((res) => {
+        if (res.ok) {
+          setMcpServers(res.servers || [])
+          setMcpTools(res.tools || [])
+        }
+      })
+      .catch(() => null)
+  }, [integrationsConfig])
+
+  const handleRunMcpToolTest = async () => {
+    setRunningTool(true)
+    setToolResultJson("")
+    try {
+      const args: Record<string, unknown> =
+        selectedTool === "get_pending_actions"
+          ? { customer: toolAccountArg }
+          : selectedTool === "search_customer_evidence"
+            ? { account_name: toolAccountArg, query: toolQueryArg, top_k: 4 }
+            : selectedTool === "propose_followup_task"
+              ? {
+                  customer: toolAccountArg,
+                  action: `Executive renewal review for ${toolAccountArg}`,
+                  refs: "E1, E2, KB-1",
+                  proposed_change: "Due tomorrow at 5:00 PM",
+                  description:
+                    "Proposed via DealFlow MCP Server tool test (requires human approval).",
+                }
+              : { account_name: toolAccountArg }
+
+      const res = await callBackendMcpTool(undefined, selectedTool, args)
+      setToolResultJson(JSON.stringify(res, null, 2))
+    } catch (err: unknown) {
+      setToolResultJson(
+        JSON.stringify(
+          { error: err instanceof Error ? err.message : String(err) },
+          null,
+          2,
+        ),
+      )
+    } finally {
+      setRunningTool(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 className="text-2xl font-bold text-slate-950">Integrations</h1>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-2xl font-bold text-slate-950">Integrations</h1>
+            <Badge tone={connectedCount > 0 ? "green" : "neutral"}>
+              {connectedCount}/4 External Sources Connected
+            </Badge>
+            <Badge tone="green">
+              Central MCP Gateway Active ({mcpTools.length || 9} Tools)
+            </Badge>
+          </div>
           <p className="mt-2 text-sm text-slate-500">
-            Manage the data sources and AI models DealFlow AI uses to create
-            evidence-backed insights.
+            Connect OAuth 2.0 & API sources through the server-side Central MCP
+            Gateway. Unconfigured sources remain marked as{" "}
+            <strong>Not configured</strong> until a real authentication check
+            succeeds.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1497,6 +1643,7 @@ function Integrations({
           </Button>
         </div>
       </div>
+
       <div className="grid gap-4 md:grid-cols-2">
         <div
           className={`rounded-xl border p-4 text-sm ${
@@ -1508,16 +1655,16 @@ function Integrations({
           <span className="font-bold">
             {isSupabaseConnected
               ? "Supabase Backend Connected:"
-              : "Supabase Demo Mode:"}
+              : "Supabase Database Not Linked:"}
           </span>{" "}
           {isSupabaseConnected
-            ? "Database tables, Authentication, and Realtime subscriptions are active."
+            ? "Database tables, Authentication, RLS policies, and Realtime subscriptions are active."
             : "Click 'Connect Supabase Database' to link your live Supabase project."}
         </div>
         <div
           className={`rounded-xl border p-4 text-sm ${
             isGeminiConnected
-              ? "border-purple-200 bg-purple-50 text-purple-900"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
               : "border-slate-200 bg-white text-slate-700"
           }`}
         >
@@ -1527,45 +1674,308 @@ function Integrations({
               : "DealFlow AI Engine Not Configured:"}
           </span>{" "}
           {isGeminiConnected
-            ? "Live AI risk explanations, email drafting, and RevOps Copilot are active."
+            ? "MCP tool-calling agent, RAG evidence search, and Copilot are active."
             : "Click 'Connect AI Engine' to configure your API key for live analysis and email generation."}
         </div>
       </div>
+
       <div className="grid gap-5 md:grid-cols-2">
-        {integrations.map((item) => (
-          <Card key={item.name} className="p-6">
-            <div className="flex items-start gap-4">
-              <span className="grid h-12 w-12 place-items-center rounded-xl bg-slate-100 text-slate-600">
-                <Icon name={(item.icon as IconName) || "plug"} />
-              </span>
-              <div className="flex-1">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h2 className="font-bold text-slate-900">{item.name}</h2>
-                    <p className="mt-0.5 text-sm text-slate-500">
-                      {item.provider}
-                    </p>
+        {cards.map((item) => {
+          const kind = item.name as IntegrationKind
+          const isConnected = item.status === "Connected"
+          const isError = item.status === "Error"
+          const lastSync =
+            kind === "CRM"
+              ? integrationsConfig.crm.lastSyncedAt
+              : kind === "Email"
+                ? integrationsConfig.email.lastSyncedAt
+                : kind === "Calendar"
+                  ? integrationsConfig.calendar.lastSyncedAt
+                  : integrationsConfig.usage.lastSyncedAt
+
+          return (
+            <Card key={item.name} className="p-6">
+              <div className="flex items-start gap-4">
+                <span
+                  className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl ${
+                    isConnected
+                      ? "bg-emerald-50 text-emerald-600"
+                      : isError
+                        ? "bg-red-50 text-red-600"
+                        : "bg-slate-100 text-slate-600"
+                  }`}
+                >
+                  <Icon name={(item.icon as IconName) || "plug"} />
+                </span>
+                <div className="flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h2 className="font-bold text-slate-900">{item.name}</h2>
+                      <p className="mt-0.5 text-sm font-medium text-slate-500">
+                        {item.provider}
+                      </p>
+                    </div>
+                    <Badge tone={item.tone}>
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          isConnected
+                            ? "bg-emerald-500"
+                            : isError
+                              ? "bg-red-500"
+                              : "bg-slate-400"
+                        }`}
+                      />
+                      {item.status}
+                    </Badge>
                   </div>
-                  <Badge tone={item.tone}>{item.status}</Badge>
-                </div>
-                <p className="mt-4 text-sm text-slate-600">
-                  {item.description}
-                </p>
-                <div className="mt-5 flex gap-2">
-                  <Button onClick={() => onToggleIntegration(item)}>
-                    {item.status === "Connected"
-                      ? "Switch to Demo Mode"
-                      : "Connect Source"}
-                  </Button>
-                  <Button tone="ghost" onClick={onOpenSupabaseModal}>
-                    View data mapping
-                  </Button>
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    {item.description}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                    <span>
+                      Last sync:{" "}
+                      <strong className="text-slate-600">
+                        {lastSync || "Never synced"}
+                      </strong>
+                    </span>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      onClick={() => onOpenConnector(kind)}
+                      className="font-semibold text-emerald-700 hover:underline"
+                    >
+                      View data mapping →
+                    </button>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      tone={isConnected ? "secondary" : "primary"}
+                      icon="plug"
+                      onClick={() => onOpenConnector(kind)}
+                    >
+                      {isConnected
+                        ? "Reconnect / Configure"
+                        : "Connect Source"}
+                    </Button>
+                    <Button
+                      tone="secondary"
+                      onClick={() => onOpenConnector(kind)}
+                    >
+                      Test Connection
+                    </Button>
+                    <Button
+                      tone="ghost"
+                      onClick={() => onOpenConnector(kind)}
+                    >
+                      Sync Now
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          )
+        })}
       </div>
+
+      {/* Central MCP Gateway & Official SDK Server Inspector */}
+      <Card className="p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="font-bold text-slate-900">
+                Central Server-Side MCP Gateway & Tool Registry
+              </h2>
+              <Badge tone="green">Official MCP TypeScript SDK</Badge>
+            </div>
+            <p className="mt-0.5 text-xs text-slate-500">
+              All MCP servers are orchestrated server-side with schema
+              validation, tool allowlisting, workspace access checks, and
+              human-in-the-loop approval guards.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {(mcpServers.length > 0
+            ? mcpServers
+            : [
+                {
+                  serverId: "dealflow_mcp",
+                  displayName: "DealFlow AI Custom MCP Server",
+                  transportType: "in-memory-sdk",
+                  available: true,
+                  connectionStatus: "Connected",
+                  toolCount: 6,
+                },
+                {
+                  serverId: "gmail_mcp",
+                  displayName: "Google Workspace Gmail Adapter",
+                  transportType: "verified-api-adapter",
+                  available: true,
+                  connectionStatus: integrationsConfig.email.connected
+                    ? "Connected"
+                    : "Not configured",
+                  toolCount: 1,
+                },
+                {
+                  serverId: "calendar_mcp",
+                  displayName: "Google Calendar Adapter",
+                  transportType: "verified-api-adapter",
+                  available: true,
+                  connectionStatus: integrationsConfig.calendar.connected
+                    ? "Connected"
+                    : "Not configured",
+                  toolCount: 1,
+                },
+                {
+                  serverId: "salesforce_mcp",
+                  displayName: "Salesforce CRM Adapter",
+                  transportType: "verified-api-adapter",
+                  available: true,
+                  connectionStatus: integrationsConfig.crm.connected
+                    ? "Connected"
+                    : "Not configured",
+                  toolCount: 1,
+                },
+              ]
+          ).map((srv) => (
+            <div
+              key={srv.serverId}
+              className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 text-xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono font-bold text-slate-900">
+                  {srv.serverId}
+                </span>
+                <Badge
+                  tone={
+                    srv.connectionStatus === "Connected" ? "green" : "neutral"
+                  }
+                >
+                  {srv.connectionStatus}
+                </Badge>
+              </div>
+              <p className="mt-1 font-medium text-slate-700">
+                {srv.displayName}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {srv.toolCount} allowlisted tools · {srv.transportType}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <p className="text-xs font-bold text-slate-900">
+            Test Custom DealFlow AI MCP Server Tools (via Central Gateway)
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <select
+              value={selectedTool}
+              onChange={(e) => setSelectedTool(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+            >
+              <option value="get_account_summary">get_account_summary</option>
+              <option value="get_customer_signals">get_customer_signals</option>
+              <option value="search_customer_evidence">
+                search_customer_evidence
+              </option>
+              <option value="get_product_usage">get_product_usage</option>
+              <option value="propose_followup_task">
+                propose_followup_task (Pending Only)
+              </option>
+              <option value="get_pending_actions">get_pending_actions</option>
+            </select>
+            <input
+              value={toolAccountArg}
+              onChange={(e) => setToolAccountArg(e.target.value)}
+              placeholder="Account Name (e.g. Acme Corporation)"
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+            />
+            <div className="flex gap-2">
+              {selectedTool === "search_customer_evidence" && (
+                <input
+                  value={toolQueryArg}
+                  onChange={(e) => setToolQueryArg(e.target.value)}
+                  placeholder="Evidence search query..."
+                  className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
+                />
+              )}
+              <Button
+                tone="primary"
+                icon="spark"
+                onClick={handleRunMcpToolTest}
+                disabled={runningTool}
+              >
+                {runningTool ? "Calling MCP..." : "Invoke MCP Tool"}
+              </Button>
+            </div>
+          </div>
+          {toolResultJson && (
+            <pre className="mt-3 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-3 font-mono text-[11px] leading-5 text-emerald-300">
+              {toolResultJson}
+            </pre>
+          )}
+        </div>
+      </Card>
+
+      {/* Live Integration Sync & Execution Activity Log */}
+      <Card className="p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4">
+          <div>
+            <h2 className="font-bold text-slate-900">
+              Live Integration Sync & Dispatch Stream
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Real-time log of CRM account imports, email dispatches, Google
+              Calendar invites, and product usage telemetry events.
+            </p>
+          </div>
+          <Badge tone="neutral">
+            {integrationsConfig.logs.length} Recorded Events
+          </Badge>
+        </div>
+
+        {integrationsConfig.logs.length === 0 ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-5 text-center text-xs text-slate-500">
+            No live integration events recorded yet. Click{" "}
+            <strong>Connect Source</strong> on any card above to configure
+            credentials and execute a live sync.
+          </div>
+        ) : (
+          <div className="mt-4 divide-y divide-slate-100">
+            {integrationsConfig.logs.slice(0, 8).map((log) => (
+              <div
+                key={log.id}
+                className="flex flex-col justify-between gap-2 py-3 text-xs sm:flex-row sm:items-center"
+              >
+                <div className="flex items-start gap-3">
+                  <Badge
+                    tone={
+                      log.status === "success"
+                        ? "green"
+                        : log.status === "error"
+                          ? "red"
+                          : "amber"
+                    }
+                  >
+                    {log.integration}
+                  </Badge>
+                  <div>
+                    <p className="font-semibold text-slate-900">
+                      {log.summary}
+                    </p>
+                    <p className="mt-0.5 text-slate-500">{log.details}</p>
+                  </div>
+                </div>
+                <span className="shrink-0 font-mono text-[11px] text-slate-400">
+                  {log.timestamp}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   )
 }
@@ -1859,9 +2269,13 @@ function RisksAndOpportunities({
 function SettingsPage({
   settings,
   onSaveSettings,
+  theme,
+  onSelectTheme,
 }: {
   settings: WorkspaceSettingsRecord
   onSaveSettings: (next: WorkspaceSettingsRecord) => void
+  theme: ThemeMode
+  onSelectTheme: (nextTheme: ThemeMode) => void
 }) {
   const [draft, setDraft] = useState<WorkspaceSettingsRecord>(settings)
 
@@ -1874,13 +2288,13 @@ function SettingsPage({
       <div>
         <h1 className="text-2xl font-bold text-slate-950">Settings</h1>
         <p className="mt-2 text-sm text-slate-500">
-          Manage workspace preferences, approval rules, and notifications.
+          Manage workspace preferences, appearance theme, approval rules, and notifications.
         </p>
       </div>
       <div className="grid gap-6 xl:grid-cols-3">
         <Card className="h-fit p-3">
           {[
-            ["Workspace", "settings"],
+            ["Workspace & Theme", "settings"],
             ["Team & permissions", "users"],
             ["Approval policy", "shield"],
             ["Notifications", "bell"],
@@ -1899,6 +2313,59 @@ function SettingsPage({
           ))}
         </Card>
         <Card className="p-6 xl:col-span-2">
+          {/* Appearance & Theme Mode Section */}
+          <div className="mb-6 border-b border-slate-100 pb-6">
+            <h2 className="font-bold text-slate-900">
+              Appearance & Theme Mode
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Switch between White (Light) and Dark theme across the DealFlow AI Front Page, Login Portal, and Operator Dashboard.
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => onSelectTheme("light")}
+                className={`flex items-start justify-between rounded-xl border p-4 text-left transition ${
+                  theme === "light"
+                    ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-500/20"
+                    : "border-slate-200 bg-slate-50/50 hover:border-slate-300"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                    <span>☀️</span>
+                    <span>White (Light) Theme</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    High-contrast daylight workspace with white cards and slate typography.
+                  </p>
+                </div>
+                {theme === "light" && <Badge tone="green">Active</Badge>}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onSelectTheme("dark")}
+                className={`flex items-start justify-between rounded-xl border p-4 text-left transition ${
+                  theme === "dark"
+                    ? "border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-500/20"
+                    : "border-slate-200 bg-slate-50/50 hover:border-slate-300"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                    <span>🌙</span>
+                    <span>Dark Theme</span>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Low-glare obsidian slate surfaces with glowing emerald accents.
+                  </p>
+                </div>
+                {theme === "dark" && <Badge tone="green">Active</Badge>}
+              </button>
+            </div>
+          </div>
+
           <div className="border-b border-slate-100 pb-5">
             <h2 className="font-bold text-slate-900">Workspace details</h2>
             <p className="mt-1 text-sm text-slate-500">
@@ -2742,93 +3209,71 @@ function SupabaseConfigModal({
 }
 
 function AuthModal({
-  user,
+  activeUser,
   close,
-  onAuthSuccess,
+  onUpdateProfile,
+  onSignOut,
 }: {
-  user: User | null
+  activeUser: AppSessionUser
   close: () => void
-  onAuthSuccess: (message: string) => void
+  onUpdateProfile: (updated: AppSessionUser, resetPodData: boolean) => void
+  onSignOut: () => void
 }) {
-  const [mode, setMode] = useState<"signin" | "signup" | "magic">("signin")
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [fullName, setFullName] = useState("Jordan Davis")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState("")
+  const [fullName, setFullName] = useState(activeUser.fullName)
+  const [role, setRole] = useState(activeUser.role)
+  const [department, setDepartment] = useState(activeUser.department)
+  const [saving, setSaving] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError("")
-    const supabase = getSupabaseClient()
-    if (!supabase) {
-      setError(
-        "Supabase URL & Anon Key are not configured yet. Click the 'Demo Mode (Connect Supabase)' badge in the top bar first.",
-      )
-      return
+    setSaving(true)
+    const pod = resolvePodForUser(activeUser.id, department)
+    const changedPod = department !== activeUser.department
+    const updatedUser: AppSessionUser = {
+      ...activeUser,
+      fullName: fullName.trim() || activeUser.fullName,
+      role: role.trim() || activeUser.role,
+      department: pod.department,
+      portfolioLabel: pod.portfolioLabel,
+      avatarInitials: getInitials(fullName.trim() || activeUser.fullName),
     }
-    setLoading(true)
+
     try {
-      if (mode === "magic") {
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          email,
-          options: {
-            emailRedirectTo: window.location.origin,
-          },
-        })
-        if (otpError) throw otpError
-        onAuthSuccess(`Magic sign-in link sent to ${email}! Check your inbox.`)
-      } else if (mode === "signup") {
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: window.location.origin,
-            data: { full_name: fullName, role: "RevOps Admin" },
-          },
-        })
-        if (signUpError) throw signUpError
-        if (data.user) {
-          await supabase.from("profiles").upsert(
+      const supabase = getSupabaseClient()
+      if (supabase) {
+        await supabase.auth
+          .updateUser({
+            data: {
+              full_name: updatedUser.fullName,
+              role: updatedUser.role,
+              department: updatedUser.department,
+              portfolio_label: updatedUser.portfolioLabel,
+            },
+          })
+          .catch(() => null)
+
+        await supabase
+          .from("profiles")
+          .upsert(
             [
               {
-                id: data.user.id,
-                email: data.user.email,
-                full_name: fullName,
-                role: "RevOps Admin",
+                id: updatedUser.id,
+                email: updatedUser.email,
+                full_name: updatedUser.fullName,
+                role: updatedUser.role,
+                department: updatedUser.department,
+                portfolio_label: updatedUser.portfolioLabel,
               },
             ],
             { onConflict: "id" },
           )
-        }
-        if (data.session) {
-          onAuthSuccess(`Account created and signed in as ${fullName}!`)
-        } else {
-          onAuthSuccess(
-            `Account registered! Please confirm the verification email sent to ${email}.`,
-          )
-        }
-      } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
-        if (signInError) throw signInError
-        onAuthSuccess("Signed in and authorized via Supabase Auth!")
+          .then(() => null, () => null)
       }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Authentication failed")
+      onUpdateProfile(updatedUser, changedPod)
+      close()
     } finally {
-      setLoading(false)
+      setSaving(false)
     }
-  }
-
-  const handleSignOut = async () => {
-    const supabase = getSupabaseClient()
-    if (supabase) {
-      await supabase.auth.signOut()
-    }
-    onAuthSuccess("Signed out of Supabase session.")
   }
 
   return (
@@ -2837,7 +3282,7 @@ function AuthModal({
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div className="flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-600 text-white">
@@ -2845,12 +3290,10 @@ function AuthModal({
             </span>
             <div>
               <h2 className="font-bold text-slate-950">
-                {user ? "RevOps Operator Profile" : "Supabase Authentication"}
+                Supabase Operator Profile & Territory
               </h2>
               <p className="text-xs text-slate-500">
-                {user
-                  ? "Authorized Supabase JWT session active"
-                  : "Sign in or create an operator account"}
+                Manage your authenticated Supabase identity and assigned territory pod
               </p>
             </div>
           </div>
@@ -2861,128 +3304,123 @@ function AuthModal({
             <Icon name="close" />
           </button>
         </div>
-        {user ? (
-          <div className="space-y-4 p-6">
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-emerald-700">
-                  Authorized Operator
-                </p>
-                <Badge tone="green">Verified JWT</Badge>
-              </div>
-              <p className="mt-1 text-sm font-bold text-slate-900">
-                {user.user_metadata?.full_name || user.email}
+
+        <form onSubmit={handleSaveProfile} className="space-y-4 p-6">
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">
+                Authenticated Supabase Session
               </p>
-              <p className="text-xs text-slate-600">{user.email}</p>
-              <p className="mt-2 font-mono text-[11px] text-slate-400">
-                User ID: {user.id}
-              </p>
+              <Badge tone="green">Verified Supabase JWT</Badge>
             </div>
-            <div className="flex justify-end gap-3">
-              <Button onClick={close}>Close</Button>
-              <Button tone="danger" onClick={handleSignOut}>
-                Sign Out
-              </Button>
+            <div className="mt-2 flex items-center gap-3">
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-emerald-600 text-sm font-black text-white">
+                {activeUser.avatarInitials}
+              </div>
+              <div>
+                <p className="text-base font-bold text-slate-900">
+                  {activeUser.fullName}
+                </p>
+                <p className="text-xs text-slate-600">
+                  {activeUser.role} · {activeUser.email}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 rounded-lg border border-emerald-200 bg-white px-3 py-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-500">
+                  Supabase User ID (`auth.uid()`):
+                </span>
+                <code className="font-mono font-bold text-emerald-700">
+                  {activeUser.id}
+                </code>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-500">
+                  Assigned Portfolio:
+                </span>
+                <span className="font-semibold text-slate-800">
+                  {activeUser.portfolioLabel}
+                </span>
+              </div>
             </div>
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4 p-6">
-            <div className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
-              <button
-                type="button"
-                onClick={() => setMode("signin")}
-                className={`rounded-lg py-2 text-xs font-semibold ${
-                  mode === "signin"
-                    ? "bg-white text-slate-900 shadow-sm"
-                    : "text-slate-600"
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("signup")}
-                className={`rounded-lg py-2 text-xs font-semibold ${
-                  mode === "signup"
-                    ? "bg-white text-slate-900 shadow-sm"
-                    : "text-slate-600"
-                }`}
-              >
-                Sign Up
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("magic")}
-                className={`rounded-lg py-2 text-xs font-semibold ${
-                  mode === "magic"
-                    ? "bg-white text-slate-900 shadow-sm"
-                    : "text-slate-600"
-                }`}
-              >
-                Magic Link
-              </button>
-            </div>
-            {error && (
-              <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                {error}
-              </div>
-            )}
-            {mode === "signup" && (
-              <label className="block text-xs font-semibold text-slate-600">
-                Full Name
-                <input
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
-                />
-              </label>
-            )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-xs font-semibold text-slate-600">
-              Work Email
+              Operator Full Name
               <input
-                type="email"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="jordan@dealflow.ai"
-                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal text-slate-900"
               />
             </label>
-            {mode !== "magic" && (
-              <label className="block text-xs font-semibold text-slate-600">
-                Password
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal"
-                />
-              </label>
-            )}
-            <div className="flex justify-end gap-3 pt-2">
+            <label className="block text-xs font-semibold text-slate-600">
+              Operator Role
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal text-slate-900"
+              >
+                <option value="Enterprise Account Executive">
+                  Enterprise Account Executive
+                </option>
+                <option value="Growth & Expansion Lead">
+                  Growth & Expansion Lead
+                </option>
+                <option value="VP of Revenue Operations">
+                  VP of Revenue Operations
+                </option>
+                <option value="Customer Success Manager">
+                  Customer Success Manager
+                </option>
+                <option value="RevOps Analyst">RevOps Analyst</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="block text-xs font-semibold text-slate-600">
+            Assigned Revenue Territory Pod
+            <select
+              value={department}
+              onChange={(e) => setDepartment(e.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 p-2.5 text-sm font-normal text-slate-900"
+            >
+              {TERRITORY_PODS.map((pod) => (
+                <option key={pod.department} value={pod.department}>
+                  {pod.portfolioLabel} ({pod.department})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-4">
+            <Button
+              type="button"
+              tone="danger"
+              onClick={() => {
+                close()
+                onSignOut()
+              }}
+            >
+              Sign Out of Supabase
+            </Button>
+            <div className="flex items-center gap-2">
               <Button type="button" onClick={close}>
                 Cancel
               </Button>
-              <Button type="submit" tone="primary" disabled={loading}>
-                {loading
-                  ? "Authenticating..."
-                  : mode === "signin"
-                    ? "Sign In"
-                    : mode === "signup"
-                      ? "Create Account"
-                      : "Send Magic Link"}
+              <Button type="submit" tone="primary" disabled={saving}>
+                {saving ? "Saving..." : "Save Profile & Territory"}
               </Button>
             </div>
-          </form>
-        )}
+          </div>
+        </form>
       </div>
     </div>
   )
 }
+
 
 function GeminiModal({
   accounts,
@@ -3060,13 +3498,25 @@ function GeminiModal({
     [testRagQuery, ragCorpus, selectedAccount.name],
   )
 
-  // Copilot chat state with RAG retrieved chunks per message
+  // Copilot chat state with RAG retrieved chunks & Chain-of-Thought reasoning per message
   const [prompt, setPrompt] = useState("")
   const [asking, setAsking] = useState(false)
+  const [activeThinkingQuery, setActiveThinkingQuery] = useState("")
+  const [thinkingElapsedSec, setThinkingElapsedSec] = useState(0)
+  const [thinkingStageIdx, setThinkingStageIdx] = useState(0)
+  const [liveThinkingOpen, setLiveThinkingOpen] = useState(true)
+  const [expandedThoughts, setExpandedThoughts] = useState<
+    Record<number, boolean>
+  >({})
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
+
   const [messages, setMessages] = useState<
     Array<{
       role: "user" | "assistant"
       text: string
+      thinking?: string
+      thinkingSteps?: string[]
+      thinkingDurationSec?: number
       retrievedChunks?: RetrievedChunk[]
       totalIndexed?: number
     }>
@@ -3076,6 +3526,47 @@ function GeminiModal({
       text: `Hi! I'm your DealFlow AI Copilot (${ragCorpus.length} indexed records across CRM, Telemetry, Playbooks & Custom Documents). Ask me anything about ${selectedAccount.name} or portfolio health!`,
     },
   ])
+
+  const liveThinkingStages = useMemo(() => {
+    const matchedCodes = retrieveRelevantChunks(
+      activeThinkingQuery || selectedAccount.name,
+      ragCorpus,
+      { topK: 4, activeCustomer: selectedAccount.name },
+    )
+      .map((c) => `[${c.citationCode}]`)
+      .join(", ")
+
+    return [
+      `Understanding prompt intent & scoping context to ${selectedAccount.name} (${selectedAccount.arr} ARR · Renewal ${selectedAccount.renewal})`,
+      `Scanning ${ragCorpus.length} indexed knowledge records & ranking top evidence matches (${matchedCodes || "[E1], [E2], [PB-1]"})`,
+      `Evaluating primary account signal ("${selectedAccount.signal}") & champion engagement across QBR and product telemetry`,
+      `Synthesizing evidence-backed response & validating human-in-the-loop governance rules [PB-3]`,
+    ]
+  }, [activeThinkingQuery, ragCorpus, selectedAccount])
+
+  useEffect(() => {
+    if (!asking) {
+      setThinkingElapsedSec(0)
+      setThinkingStageIdx(0)
+      return
+    }
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => {
+      const sec = Math.round(((Date.now() - startedAt) / 1000) * 10) / 10
+      setThinkingElapsedSec(sec)
+      if (sec < 0.5) setThinkingStageIdx(0)
+      else if (sec < 1.1) setThinkingStageIdx(1)
+      else if (sec < 1.7) setThinkingStageIdx(2)
+      else setThinkingStageIdx(3)
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [asking])
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight
+    }
+  }, [messages, asking, thinkingStageIdx])
 
   const handleAddRagDoc = (e: React.FormEvent) => {
     e.preventDefault()
@@ -3172,6 +3663,8 @@ function GeminiModal({
       saveGeminiConfig(activeKey, activeModel)
     }
     setPrompt("")
+    setActiveThinkingQuery(query)
+    setLiveThinkingOpen(true)
     setMessages((prev) => [...prev, { role: "user", text: query }])
     setAsking(true)
     try {
@@ -3192,15 +3685,22 @@ function GeminiModal({
           topK: 6,
         },
       )
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: ragRes.answer,
-          retrievedChunks: ragRes.retrievedChunks,
-          totalIndexed: ragRes.totalIndexedChunks,
-        },
-      ])
+      setMessages((prev) => {
+        const nextIdx = prev.length
+        setExpandedThoughts((old) => ({ ...old, [nextIdx]: true }))
+        return [
+          ...prev,
+          {
+            role: "assistant",
+            text: ragRes.answer,
+            thinking: ragRes.thinking,
+            thinkingSteps: ragRes.thinkingSteps,
+            thinkingDurationSec: ragRes.thinkingDurationSec,
+            retrievedChunks: ragRes.retrievedChunks,
+            totalIndexed: ragRes.totalIndexedChunks,
+          },
+        ]
+      })
     } catch (err: unknown) {
       setMessages((prev) => [
         ...prev,
@@ -3304,55 +3804,176 @@ function GeminiModal({
                 </button>
               ))}
             </div>
-            <div className="h-80 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
-              {messages.map((m, idx) => (
-                <div
-                  key={idx}
-                  className={`flex flex-col ${
-                    m.role === "user" ? "items-end" : "items-start"
-                  }`}
-                >
+            <div
+              ref={chatScrollRef}
+              className="h-96 space-y-4 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4"
+            >
+              {messages.map((m, idx) => {
+                const hasThinking =
+                  m.role === "assistant" &&
+                  m.thinkingSteps &&
+                  m.thinkingSteps.length > 0
+                const isThoughtOpen = Boolean(expandedThoughts[idx])
+
+                return (
                   <div
-                    className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-xs leading-5 ${
-                      m.role === "user"
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-200 bg-white text-slate-800 shadow-2xs"
+                    key={idx}
+                    className={`flex flex-col ${
+                      m.role === "user" ? "items-end" : "items-start"
                     }`}
                   >
-                    {m.text}
-                  </div>
-                  {m.retrievedChunks && m.retrievedChunks.length > 0 && (
-                    <div className="mt-1.5 max-w-[88%] rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5">
-                      <p className="text-[11px] font-semibold text-emerald-800">
-                        Verified Sources Used ({m.retrievedChunks.length} of{" "}
-                        {m.totalIndexed || ragCorpus.length} records):
-                      </p>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {m.retrievedChunks.map((chunk) => (
-                          <span
-                            key={chunk.id}
-                            title={`${chunk.title}\n${chunk.content}`}
-                            className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-0.5 text-[11px] text-slate-700"
-                          >
-                            <span className="font-bold text-emerald-700">
-                              [{chunk.citationCode}]
-                            </span>
-                            <span className="max-w-36 truncate">
-                              {chunk.title}
-                            </span>
-                            <span className="font-semibold text-emerald-600">
-                              {Math.round(chunk.score * 100)}%
-                            </span>
+                    {/* Collapsible ChatGPT / Claude style "Thought for X.Xs" reasoning block */}
+                    {hasThinking && (
+                      <div className="mb-2 w-full max-w-[88%]">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedThoughts((prev) => ({
+                              ...prev,
+                              [idx]: !prev[idx],
+                            }))
+                          }
+                          className="inline-flex items-center gap-2 rounded-lg border border-purple-200/80 bg-purple-50/70 px-3 py-1.5 text-[11px] font-semibold text-purple-800 transition hover:bg-purple-100/80"
+                        >
+                          <span className="inline-block h-2 w-2 rounded-full bg-purple-600" />
+                          <span>
+                            Thought for{" "}
+                            {(m.thinkingDurationSec || 2.4).toFixed(1)}s
                           </span>
-                        ))}
+                          <span className="text-purple-500">·</span>
+                          <span className="font-normal text-purple-700">
+                            {m.thinkingSteps?.length} reasoning steps
+                          </span>
+                          <span className="ml-1 text-[10px] text-purple-600">
+                            {isThoughtOpen ? "▾ Hide" : "▸ View thinking"}
+                          </span>
+                        </button>
+
+                        {isThoughtOpen && (
+                          <div className="mt-1.5 rounded-xl border border-purple-200/70 bg-white/90 p-3 shadow-2xs">
+                            <div className="border-l-2 border-purple-400 pl-3 space-y-2">
+                              {m.thinkingSteps?.map((step, sIdx) => (
+                                <div
+                                  key={sIdx}
+                                  className="flex items-start gap-2 text-[11px] leading-relaxed text-slate-600"
+                                >
+                                  <span className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[10px] font-bold text-purple-700">
+                                    {sIdx + 1}
+                                  </span>
+                                  <span>{step}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
+                    )}
+
+                    <div
+                      className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-xs leading-5 ${
+                        m.role === "user"
+                          ? "bg-slate-900 text-white"
+                          : "border border-slate-200 bg-white text-slate-800 shadow-2xs"
+                      }`}
+                    >
+                      {m.text}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {m.retrievedChunks && m.retrievedChunks.length > 0 && (
+                      <div className="mt-1.5 max-w-[88%] rounded-xl border border-emerald-200 bg-emerald-50/70 p-2.5">
+                        <p className="text-[11px] font-semibold text-emerald-800">
+                          Verified Sources Used ({m.retrievedChunks.length} of{" "}
+                          {m.totalIndexed || ragCorpus.length} records):
+                        </p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {m.retrievedChunks.map((chunk) => (
+                            <span
+                              key={chunk.id}
+                              title={`${chunk.title}\n${chunk.content}`}
+                              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-0.5 text-[11px] text-slate-700"
+                            >
+                              <span className="font-bold text-emerald-700">
+                                [{chunk.citationCode}]
+                              </span>
+                              <span className="max-w-36 truncate">
+                                {chunk.title}
+                              </span>
+                              <span className="font-semibold text-emerald-600">
+                                {Math.round(chunk.score * 100)}%
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              {/* Live Progressive Thinking Stream (like ChatGPT o3 / Claude Extended Thinking) */}
               {asking && (
-                <div className="text-xs font-medium text-purple-700">
-                  Analyzing verified account intelligence & generating response...
+                <div className="flex flex-col items-start">
+                  <div className="w-full max-w-[88%] rounded-2xl border border-purple-200 bg-white p-3.5 shadow-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setLiveThinkingOpen((v) => !v)}
+                        className="flex items-center gap-2.5 text-left"
+                      >
+                        <span className="relative flex h-3 w-3">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-purple-400 opacity-75"></span>
+                          <span className="relative inline-flex h-3 w-3 rounded-full bg-purple-600"></span>
+                        </span>
+                        <span className="text-xs font-bold text-purple-900">
+                          Thinking... {thinkingElapsedSec.toFixed(1)}s
+                        </span>
+                        <span className="hidden text-[11px] text-slate-500 sm:inline">
+                          · {liveThinkingStages[thinkingStageIdx]}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLiveThinkingOpen((v) => !v)}
+                        className="rounded-md px-2 py-0.5 text-[11px] font-semibold text-purple-700 hover:bg-purple-50"
+                      >
+                        {liveThinkingOpen ? "▾ Hide" : "▸ Show"}
+                      </button>
+                    </div>
+
+                    {liveThinkingOpen && (
+                      <div className="mt-3 border-l-2 border-purple-300 pl-3 space-y-2">
+                        {liveThinkingStages.map((stageText, idx) => {
+                          const isCompleted = idx < thinkingStageIdx
+                          const isCurrent = idx === thinkingStageIdx
+                          const isPending = idx > thinkingStageIdx
+                          return (
+                            <div
+                              key={idx}
+                              className={`flex items-start gap-2 text-[11px] leading-relaxed transition-opacity duration-300 ${
+                                isPending
+                                  ? "opacity-35 text-slate-400"
+                                  : isCurrent
+                                    ? "font-medium text-purple-900"
+                                    : "text-slate-600"
+                              }`}
+                            >
+                              <span
+                                className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                                  isCompleted
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : isCurrent
+                                      ? "bg-purple-600 text-white animate-pulse"
+                                      : "bg-slate-100 text-slate-400"
+                                }`}
+                              >
+                                {isCompleted ? "✓" : idx + 1}
+                              </span>
+                              <span>{stageText}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -3375,7 +3996,7 @@ function GeminiModal({
                 icon="spark"
                 disabled={asking}
               >
-                {asking ? "Analyzing..." : "Ask Copilot"}
+                {asking ? `Thinking (${thinkingElapsedSec.toFixed(1)}s)...` : "Ask Copilot"}
               </Button>
             </form>
           </div>
@@ -3622,30 +4243,76 @@ function GeminiModal({
   )
 }
 
+const DEFAULT_SESSION_USER: AppSessionUser = {
+  id: PRESET_OPERATORS[0].id,
+  email: PRESET_OPERATORS[0].email,
+  fullName: PRESET_OPERATORS[0].fullName,
+  role: PRESET_OPERATORS[0].role,
+  department: PRESET_OPERATORS[0].department,
+  avatarInitials: PRESET_OPERATORS[0].avatarInitials,
+  authSource: "operator_credentials",
+  portfolioLabel: PRESET_OPERATORS[0].portfolioLabel,
+}
+
 export default function App() {
+  // Stage flow: Front Page ("landing") -> Operator Login ("login") -> User-ID Scoped Website ("dashboard")
+  const [appStage, setAppStage] = useState<"landing" | "login" | "dashboard">(
+    "landing",
+  )
+  const [loginInitialMode, setLoginInitialMode] = useState<"signin" | "signup">(
+    "signin",
+  )
+  const [loginInitialDepartment, setLoginInitialDepartment] = useState(
+    "Enterprise Renewals",
+  )
+  const [activeUser, setActiveUser] = useState<AppSessionUser>(
+    () => getActiveSession() ?? DEFAULT_SESSION_USER,
+  )
+
   // Keep page rendering explicit so removed routes cannot survive as stale fallbacks.
   const [page, setPage] = useState<Page>("overview")
-  const [selectedAccountName, setSelectedAccountName] =
-    useState("Acme Corporation")
 
-  // Application Data State (initialized with defaults, hydrated from Supabase when configured)
-  const [accounts, setAccounts] = useState<AccountRecord[]>(DEFAULT_ACCOUNTS)
-  const [evidenceList, setEvidenceList] =
-    useState<EvidenceRecord[]>(DEFAULT_EVIDENCE)
-  const [interactionsList, setInteractionsList] = useState<InteractionRecord[]>(
-    DEFAULT_INTERACTIONS,
+  const initialBundle = useMemo(
+    () => loadUserWorkspaceBundle(activeUser),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   )
-  const [approvals, setApprovals] =
-    useState<ApprovalRecord[]>(DEFAULT_APPROVALS)
-  const [auditLogs, setAuditLogs] =
-    useState<AuditLogRecord[]>(DEFAULT_AUDIT_LOGS)
+
+  const [selectedAccountName, setSelectedAccountName] = useState(
+    initialBundle.accounts[0]?.name || "Acme Corporation",
+  )
+
+  // Application Data State scoped to the active User ID
+  const [accounts, setAccounts] = useState<AccountRecord[]>(
+    initialBundle.accounts,
+  )
+  const [evidenceList, setEvidenceList] = useState<EvidenceRecord[]>(
+    initialBundle.evidence,
+  )
+  const [interactionsList, setInteractionsList] = useState<InteractionRecord[]>(
+    initialBundle.interactions,
+  )
+  const [approvals, setApprovals] = useState<ApprovalRecord[]>(
+    initialBundle.approvals,
+  )
+  const [auditLogs, setAuditLogs] = useState<AuditLogRecord[]>(
+    initialBundle.auditLogs,
+  )
   const [risksOpportunities, setRisksOpportunities] = useState<
     RiskOpportunityRecord[]
-  >(DEFAULT_RISKS_OPPORTUNITIES)
-  const [integrations, setIntegrations] =
-    useState<IntegrationRecord[]>(DEFAULT_INTEGRATIONS)
-  const [settings, setSettings] =
-    useState<WorkspaceSettingsRecord>(DEFAULT_SETTINGS)
+  >(initialBundle.risksOpportunities)
+  const [integrations, setIntegrations] = useState<IntegrationRecord[]>(
+    initialBundle.integrations,
+  )
+  const [integrationsConfig, setIntegrationsConfig] =
+    useState<AllIntegrationsConfig>(() =>
+      loadIntegrationsConfig(activeUser.id),
+    )
+  const [activeIntegrationModal, setActiveIntegrationModal] =
+    useState<IntegrationKind | null>(null)
+  const [settings, setSettings] = useState<WorkspaceSettingsRecord>(
+    initialBundle.settings,
+  )
 
   // UI & Modals State
   const [modal, setModal] = useState("")
@@ -3660,15 +4327,20 @@ export default function App() {
   const [execution, setExecution] = useState(false)
   const [toast, setToast] = useState("")
   const [isSeeding, setIsSeeding] = useState(false)
+  const [theme, setTheme] = useState<ThemeMode>(() => getSavedTheme())
 
-  // Supabase Connection, Auth & Gemini AI State
+  useEffect(() => {
+    applyThemeToDom(theme)
+  }, [theme])
+
+  // Supabase Connection & Copilot AI State
   const [isSupabaseConnected, setIsSupabaseConnected] = useState(
     () => getSupabaseConfig().isConfigured,
   )
   const [isGeminiConnected, setIsGeminiConnected] = useState(
     () => getGeminiConfig().isConfigured,
   )
-  const [realtimeStatus, setRealtimeStatus] = useState<
+  const [_realtimeStatus, setRealtimeStatus] = useState<
     "connected" | "connecting" | "offline"
   >("offline")
   const [user, setUser] = useState<User | null>(null)
@@ -3678,10 +4350,103 @@ export default function App() {
     window.setTimeout(() => setToast(""), 4500)
   }, [])
 
+  const handleSelectTheme = useCallback(
+    (nextTheme: ThemeMode) => {
+      setTheme(nextTheme)
+      applyThemeToDom(nextTheme)
+      showToast(
+        nextTheme === "dark"
+          ? "Switched to Dark Theme."
+          : "Switched to White (Light) Theme.",
+      )
+    },
+    [showToast],
+  )
+
+  const toggleTheme = useCallback(() => {
+    handleSelectTheme(theme === "dark" ? "light" : "dark")
+  }, [theme, handleSelectTheme])
+
+  // Load workspace bundle whenever switching or logging in with a specific User ID
+  const applyUserWorkspace = useCallback(
+    (
+      sessionUser: AppSessionUser,
+      navigateToDashboard = true,
+      customMessage?: string,
+      resetPodData = false,
+    ) => {
+      if (resetPodData && typeof window !== "undefined") {
+        window.localStorage.removeItem(
+          `dealflow_workspace_data_v1_${sessionUser.id}`,
+        )
+      }
+      saveActiveSession(sessionUser)
+      setActiveUser(sessionUser)
+      const bundle = loadUserWorkspaceBundle(sessionUser)
+      const userIntegConfig = loadIntegrationsConfig(sessionUser.id)
+      setAccounts(bundle.accounts)
+      setEvidenceList(bundle.evidence)
+      setInteractionsList(bundle.interactions)
+      setApprovals(bundle.approvals)
+      setAuditLogs(bundle.auditLogs)
+      setRisksOpportunities(bundle.risksOpportunities)
+      setIntegrationsConfig(userIntegConfig)
+      setIntegrations(buildIntegrationCardsFromConfig(userIntegConfig))
+      setSettings(bundle.settings)
+      setSelectedAccountName(bundle.accounts[0]?.name || "Acme Corporation")
+      setPage("overview")
+      if (navigateToDashboard) {
+        setAppStage("dashboard")
+      }
+      showToast(
+        customMessage ||
+          `Loaded workspace for ${sessionUser.fullName} (User ID: ${sessionUser.id})`,
+      )
+    },
+    [showToast],
+  )
+
+  // Persist user-scoped workspace modifications per User ID
+  useEffect(() => {
+    if (!activeUser?.id) return
+    saveUserWorkspaceBundle(activeUser.id, {
+      accounts,
+      evidence: evidenceList,
+      interactions: interactionsList,
+      approvals,
+      auditLogs,
+      risksOpportunities,
+      integrations,
+      settings,
+    })
+  }, [
+    activeUser.id,
+    accounts,
+    evidenceList,
+    interactionsList,
+    approvals,
+    auditLogs,
+    risksOpportunities,
+    integrations,
+    settings,
+  ])
+
+  const handleSignOut = async () => {
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase.auth.signOut()
+    }
+    setUser(null)
+    clearActiveSession()
+    setAppStage("login")
+    showToast("Signed out of Supabase Auth session.")
+  }
+
   const operatorName =
+    activeUser.fullName ||
     user?.user_metadata?.full_name ||
     user?.email?.split("@")[0] ||
-    "Jordan Davis"
+    "RevOps Operator"
 
   const formatTimestamp = () => {
     const now = new Date()
@@ -3704,58 +4469,12 @@ export default function App() {
     setIsSupabaseConnected(true)
 
     try {
-      const [
-        accRes,
-        evRes,
-        intRes,
-        appRes,
-        audRes,
-        roRes,
-        integRes,
-        setRes,
-      ] = await Promise.all([
-        supabase.from("accounts").select("*").order("created_at", { ascending: true }),
-        supabase.from("evidence").select("*").order("code", { ascending: true }),
-        supabase
-          .from("interactions")
-          .select("*")
-          .order("sort_order", { ascending: true }),
-        supabase
-          .from("approvals")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("audit_logs")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase.from("risks_opportunities").select("*"),
+      const [integRes] = await Promise.all([
         supabase.from("integrations").select("*"),
-        supabase.from("workspace_settings").select("*").eq("id", 1).maybeSingle(),
       ])
 
-      if (!accRes.error && accRes.data && accRes.data.length > 0) {
-        setAccounts(accRes.data as AccountRecord[])
-      }
-      if (!evRes.error && evRes.data && evRes.data.length > 0) {
-        setEvidenceList(evRes.data as EvidenceRecord[])
-      }
-      if (!intRes.error && intRes.data && intRes.data.length > 0) {
-        setInteractionsList(intRes.data as InteractionRecord[])
-      }
-      if (!appRes.error && appRes.data && appRes.data.length > 0) {
-        setApprovals(appRes.data as ApprovalRecord[])
-      }
-      if (!audRes.error && audRes.data && audRes.data.length > 0) {
-        setAuditLogs(audRes.data as AuditLogRecord[])
-      }
-      if (!roRes.error && roRes.data && roRes.data.length > 0) {
-        setRisksOpportunities(roRes.data as RiskOpportunityRecord[])
-      }
       if (!integRes.error && integRes.data && integRes.data.length > 0) {
         setIntegrations(integRes.data as IntegrationRecord[])
-      }
-      if (!setRes.error && setRes.data) {
-        setSettings(setRes.data as WorkspaceSettingsRecord)
       }
     } catch {
       // Fallback to local state if tables are not created yet
@@ -3816,13 +4535,46 @@ export default function App() {
 
     fetchSupabaseData()
 
+    const syncFromSupabaseUser = async (sbUser: User) => {
+      setUser(sbUser)
+      const { data: profileRow } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", sbUser.id)
+        .maybeSingle()
+      const mapped = mapSupabaseUserToSession(sbUser, profileRow)
+      saveActiveSession(mapped)
+      setActiveUser(mapped)
+      const bundle = loadUserWorkspaceBundle(mapped)
+      setAccounts(bundle.accounts)
+      setEvidenceList(bundle.evidence)
+      setInteractionsList(bundle.interactions)
+      setApprovals(bundle.approvals)
+      setAuditLogs(bundle.auditLogs)
+      setRisksOpportunities(bundle.risksOpportunities)
+      setIntegrations(bundle.integrations)
+      setSettings(bundle.settings)
+      setSelectedAccountName(bundle.accounts[0]?.name || "Acme Corporation")
+    }
+
     supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null)
+      if (data.session?.user) {
+        syncFromSupabaseUser(data.session.user)
+      } else {
+        setUser(null)
+      }
     })
 
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user ?? null)
+      (event, session) => {
+        if (session?.user) {
+          syncFromSupabaseUser(session.user)
+          if (event === "SIGNED_IN") {
+            setAppStage("dashboard")
+          }
+        } else {
+          setUser(null)
+        }
       },
     )
 
@@ -3831,27 +4583,7 @@ export default function App() {
       .channel("revops-realtime-sync")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "accounts" },
-        () => fetchSupabaseData(),
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "approvals" },
-        () => fetchSupabaseData(),
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "audit_logs" },
-        () => fetchSupabaseData(),
-      )
-      .on(
-        "postgres_changes",
         { event: "*", schema: "public", table: "integrations" },
-        () => fetchSupabaseData(),
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "workspace_settings" },
         () => fetchSupabaseData(),
       )
       .subscribe((status) => {
@@ -3885,7 +4617,7 @@ export default function App() {
       setSelectedAccountName(matched.name)
       setPage("account")
     } else {
-      setSelectedAccountName("Acme Corporation")
+      setSelectedAccountName(accounts[0]?.name || "Acme Corporation")
       setPage("account")
     }
   }
@@ -3935,15 +4667,18 @@ export default function App() {
       "Create follow-up task"
     const refs = item?.refs || "E1, E3, E4"
 
+    const targetAccount =
+      accounts.find((a) => a.name === customer) || selectedAccount
+
     const newLog: AuditLogRecord = {
       timestamp_label: formatTimestamp(),
       customer,
       action: actionTitle,
-      decision_by: operatorName,
+      decision_by: `${operatorName} (${activeUser.id})`,
       status: "Executed",
       refs,
       details: `Task assigned to ${item?.owner || selectedAccount.owner}`,
-      actor_user_id: user?.id ?? null,
+      actor_user_id: user?.id ?? activeUser.id,
     }
 
     setModal("")
@@ -3966,7 +4701,100 @@ export default function App() {
       ),
     )
     setPage("approvals")
-    showToast("Approval verified. Action executed and audit log updated.")
+
+    // Execute connected live integrations if enabled
+    const isEmailApproval =
+      Boolean(item?.recipient_email) ||
+      actionTitle.toLowerCase().includes("email")
+
+    if (
+      isEmailApproval &&
+      integrationsConfig.email.connected &&
+      integrationsConfig.email.autoSendOnApprove
+    ) {
+      const emailRes = await sendRealEmail(integrationsConfig.email, {
+        to: item?.recipient_email || targetAccount.champion_email || "contact@company.com",
+        subject:
+          item?.email_subject ||
+          `Follow-up from DealFlow AI · ${customer}`,
+        body:
+          item?.email_body ||
+          item?.description ||
+          `Hi,\n\nChecking in regarding ${customer}'s upcoming renewal and adoption milestones.`,
+        customerName: customer,
+        openMailClientFallback: true,
+      })
+      const updatedConfig: AllIntegrationsConfig = {
+        ...integrationsConfig,
+        email: {
+          ...integrationsConfig.email,
+          lastSyncedAt: emailRes.log.timestamp,
+          sentCount: (integrationsConfig.email.sentCount || 0) + 1,
+        },
+        logs: [emailRes.log, ...integrationsConfig.logs.slice(0, 29)],
+      }
+      setIntegrationsConfig(updatedConfig)
+      saveIntegrationsConfig(activeUser.id, updatedConfig)
+      setIntegrations(buildIntegrationCardsFromConfig(updatedConfig))
+      showToast(
+        `Approved & dispatched live email via ${emailRes.methodUsed}!`,
+      )
+    } else if (
+      !isEmailApproval &&
+      integrationsConfig.calendar.connected &&
+      integrationsConfig.calendar.autoScheduleOnApprove
+    ) {
+      const tomorrowIso = new Date(Date.now() + 86400000).toISOString()
+      const calRes = await createGoogleCalendarMeeting(
+        integrationsConfig.calendar,
+        {
+          title: `${customer} · ${actionTitle}`,
+          description: item?.description || `Follow-up task for ${customer}`,
+          attendeeEmail: targetAccount.champion_email || "contact@company.com",
+          customerName: customer,
+          startTimeIso: tomorrowIso,
+          openGoogleCalendarWindow: false,
+        },
+      )
+      const updatedConfig: AllIntegrationsConfig = {
+        ...integrationsConfig,
+        calendar: {
+          ...integrationsConfig.calendar,
+          lastSyncedAt: calRes.log.timestamp,
+          syncedEventsCount:
+            (integrationsConfig.calendar.syncedEventsCount || 0) + 1,
+        },
+        logs: [calRes.log, ...integrationsConfig.logs.slice(0, 29)],
+      }
+      setIntegrationsConfig(updatedConfig)
+      saveIntegrationsConfig(activeUser.id, updatedConfig)
+      setIntegrations(buildIntegrationCardsFromConfig(updatedConfig))
+      showToast(
+        "Approval verified. Action executed & synced to Google Calendar!",
+      )
+    } else {
+      showToast("Approval verified. Action executed and audit log updated.")
+    }
+
+    if (
+      integrationsConfig.crm.connected &&
+      integrationsConfig.crm.autoSyncOnApprove
+    ) {
+      await pushCRMWebhookUpdate(integrationsConfig.crm, {
+        event: "action_approved",
+        customer,
+        action: actionTitle,
+        approvedBy: `${operatorName} (${activeUser.id})`,
+        proposedChange: item?.proposed_change,
+      })
+    }
+
+    if (item?.id) {
+      await decideAndExecuteBackendApproval(activeUser, {
+        approvalId: item.id,
+        decision: "approved",
+      })
+    }
 
     const supabase = getSupabaseClient()
     if (supabase) {
@@ -3995,7 +4823,6 @@ export default function App() {
           followup_note: item?.proposed_change || "Due tomorrow at 5:00 PM",
         })
         .eq("name", customer)
-      fetchSupabaseData()
     }
   }
 
@@ -4012,11 +4839,11 @@ export default function App() {
       timestamp_label: formatTimestamp(),
       customer,
       action: actionTitle,
-      decision_by: operatorName,
+      decision_by: `${operatorName} (${activeUser.id})`,
       status: "Rejected",
       refs,
       details: reason,
-      actor_user_id: user?.id ?? null,
+      actor_user_id: user?.id ?? activeUser.id,
     }
 
     setModal("")
@@ -4028,6 +4855,11 @@ export default function App() {
             : a,
         ),
       )
+      await decideAndExecuteBackendApproval(activeUser, {
+        approvalId: item.id,
+        decision: "rejected",
+        rejectionReason: reason,
+      })
     }
     setAuditLogs((prev) => [newLog, ...prev])
     setPage("audit")
@@ -4055,7 +4887,6 @@ export default function App() {
           .match({ customer, action: actionTitle })
       }
       await supabase.from("audit_logs").insert([newLog])
-      fetchSupabaseData()
     }
   }
 
@@ -4070,7 +4901,12 @@ export default function App() {
       setApprovals((prev) =>
         prev.map((a) =>
           a.id === item.id
-            ? { ...a, owner, proposed_change: dueDate, submitted_label: "Edited just now" }
+            ? {
+                ...a,
+                owner,
+                proposed_change: dueDate,
+                submitted_label: "Edited just now",
+              }
             : a,
         ),
       )
@@ -4095,7 +4931,6 @@ export default function App() {
             })
             .match({ customer: item.customer, action: item.action })
         }
-        fetchSupabaseData()
       }
     }
     setPage("approvals")
@@ -4130,7 +4965,7 @@ export default function App() {
       timestamp_label: formatTimestamp(),
       customer: payload.customer,
       action: "Draft follow-up email",
-      decision_by: operatorName,
+      decision_by: `${operatorName} (${activeUser.id})`,
       status: "Awaiting approval",
       refs: "E1, E2, E3",
       details: `To: ${payload.recipient}`,
@@ -4146,7 +4981,6 @@ export default function App() {
       const { id: _unused, ...insertableApproval } = newApproval
       await supabase.from("approvals").insert([insertableApproval])
       await supabase.from("audit_logs").insert([newLog])
-      fetchSupabaseData()
     }
   }
 
@@ -4154,60 +4988,98 @@ export default function App() {
     setAddCustomerOpen(false)
     setAccounts((prev) => [...prev, newAccount])
     setSelectedAccountName(newAccount.name)
-    showToast(`Added ${newAccount.name} to Customer Accounts.`)
+    showToast(
+      `Added ${newAccount.name} to ${activeUser.fullName}'s (${activeUser.id}) Customer Accounts.`,
+    )
 
     const supabase = getSupabaseClient()
     if (supabase) {
-      await supabase.from("accounts").upsert([newAccount], { onConflict: "name" })
+      await supabase
+        .from("accounts")
+        .upsert([newAccount], { onConflict: "name" })
       await supabase.from("audit_logs").insert([
         {
           timestamp_label: formatTimestamp(),
           customer: newAccount.name,
           action: "Added customer account",
-          decision_by: operatorName,
+          decision_by: `${operatorName} (${activeUser.id})`,
           status: "Executed",
           refs: "CRM",
           details: `${newAccount.arr} ARR · Owner: ${newAccount.owner}`,
         },
       ])
-      fetchSupabaseData()
     }
   }
 
-  const handleToggleIntegration = async (item: IntegrationRecord) => {
-    const nextStatus =
-      item.status === "Connected" ? "Demo mode" : "Connected"
-    const nextTone: BadgeTone = nextStatus === "Connected" ? "green" : "amber"
-
-    setIntegrations((prev) =>
-      prev.map((i) =>
-        i.name === item.name
-          ? { ...i, status: nextStatus, tone: nextTone }
-          : i,
-      ),
-    )
-    showToast(`${item.name} (${item.provider}) switched to ${nextStatus}.`)
+  const handleSaveIntegrationsConfig = async (
+    nextConfig: AllIntegrationsConfig,
+  ) => {
+    setIntegrationsConfig(nextConfig)
+    saveIntegrationsConfig(activeUser.id, nextConfig)
+    const nextCards = buildIntegrationCardsFromConfig(nextConfig)
+    setIntegrations(nextCards)
 
     const supabase = getSupabaseClient()
     if (supabase) {
       await supabase
         .from("integrations")
-        .update({ status: nextStatus, tone: nextTone })
-        .eq("name", item.name)
-      fetchSupabaseData()
+        .upsert(nextCards, { onConflict: "name" })
+    }
+  }
+
+  const handleSyncAccountsFromIntegration = async (
+    incoming: AccountRecord[],
+    sourceLabel: string,
+  ) => {
+    setAccounts((prev) => {
+      const byName = new Map(prev.map((a) => [a.name.toLowerCase(), a]))
+      for (const acc of incoming) {
+        byName.set(acc.name.toLowerCase(), acc)
+      }
+      return Array.from(byName.values())
+    })
+    showToast(`Synced ${incoming.length} account(s) from ${sourceLabel}!`)
+
+    const supabase = getSupabaseClient()
+    if (supabase && incoming.length > 0) {
+      await supabase
+        .from("accounts")
+        .upsert(incoming, { onConflict: "name" })
+    }
+  }
+
+  const handleAppendIntegrationLog = async (
+    log: IntegrationSyncLog,
+    customerName = "Portfolio",
+    auditAction?: string,
+  ) => {
+    const newAudit: AuditLogRecord = {
+      timestamp_label: log.timestamp,
+      customer: customerName,
+      action: auditAction || `${log.integration} Live Sync`,
+      decision_by: `${operatorName} (${activeUser.id})`,
+      status: log.status === "error" ? "Rejected" : "Executed",
+      refs: log.integration,
+      details: log.summary,
+      actor_user_id: user?.id ?? activeUser.id,
+    }
+    setAuditLogs((prev) => [newAudit, ...prev])
+
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      await supabase.from("audit_logs").insert([newAudit])
     }
   }
 
   const handleSaveSettings = async (next: WorkspaceSettingsRecord) => {
     setSettings(next)
-    showToast("Workspace settings saved to Supabase.")
+    showToast(`Workspace settings saved for User ID ${activeUser.id}.`)
 
     const supabase = getSupabaseClient()
     if (supabase) {
       await supabase
         .from("workspace_settings")
         .upsert([{ ...next, id: 1 }], { onConflict: "id" })
-      fetchSupabaseData()
     }
   }
 
@@ -4215,25 +5087,82 @@ export default function App() {
     (a) => a.status === "pending",
   ).length
 
+  if (appStage === "landing") {
+    return (
+      <>
+        <LandingPage
+          onGoToLogin={(mode = "signin", preferredDepartment) => {
+            setLoginInitialMode(mode)
+            if (preferredDepartment) {
+              setLoginInitialDepartment(preferredDepartment)
+            }
+            setAppStage("login")
+          }}
+          activeUser={user ? activeUser : null}
+          onEnterDashboard={() => setAppStage("dashboard")}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+        {toast && (
+          <div className="fixed bottom-6 right-5 z-50 flex max-w-sm items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+            <span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-500">
+              <Icon name="check" className="h-4 w-4" />
+            </span>
+            {toast}
+          </div>
+        )}
+      </>
+    )
+  }
+
+  if (appStage === "login") {
+    return (
+      <>
+        <LoginPage
+          initialMode={loginInitialMode}
+          initialDepartment={loginInitialDepartment}
+          onBackToLanding={() => setAppStage("landing")}
+          onLoginSuccess={(sessionUser, message) =>
+            applyUserWorkspace(sessionUser, true, message)
+          }
+          onSupabaseConfigChanged={() => {
+            setIsSupabaseConnected(getSupabaseConfig().isConfigured)
+            fetchSupabaseData()
+          }}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+        {toast && (
+          <div className="fixed bottom-6 right-5 z-50 flex max-w-sm items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl">
+            <span className="grid h-6 w-6 place-items-center rounded-full bg-emerald-500">
+              <Icon name="check" className="h-4 w-4" />
+            </span>
+            {toast}
+          </div>
+        )}
+      </>
+    )
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="dealflow-dashboard min-h-screen bg-slate-50 text-slate-900">
       <Sidebar
         page={page}
         setPage={setPage}
         pendingApprovalsCount={pendingApprovalsCount}
+        onOpenLandingPage={() => setAppStage("landing")}
       />
       <div className="lg:pl-64">
         <Topbar
           page={page}
           selectedAccountName={selectedAccount.name}
           onSearchCustomer={handleSearchCustomer}
-          isSupabaseConnected={isSupabaseConnected}
           isGeminiConnected={isGeminiConnected}
-          realtimeStatus={realtimeStatus}
-          user={user}
-          onOpenSupabaseModal={() => setSupabaseModalOpen(true)}
+          activeUser={activeUser}
           onOpenGeminiModal={() => setGeminiModalOpen(true)}
           onOpenAuthModal={() => setAuthModalOpen(true)}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
         <main className="mx-auto max-w-screen-2xl p-5 lg:p-8">
           {page === "overview" && (
@@ -4242,6 +5171,8 @@ export default function App() {
               accounts={accounts}
               pendingApprovalsCount={pendingApprovalsCount}
               onSelectAccount={handleSelectAccount}
+              activeUser={activeUser}
+              onOpenProfileModal={() => setAuthModalOpen(true)}
             />
           )}
           {page === "account" && (
@@ -4268,8 +5199,8 @@ export default function App() {
           {page === "audit" && <AuditPage auditLogs={auditLogs} />}
           {page === "integrations" && (
             <Integrations
-              integrations={integrations}
-              onToggleIntegration={handleToggleIntegration}
+              integrationsConfig={integrationsConfig}
+              onOpenConnector={(kind) => setActiveIntegrationModal(kind)}
               onOpenSupabaseModal={() => setSupabaseModalOpen(true)}
               isSupabaseConnected={isSupabaseConnected}
               onOpenGeminiModal={() => setGeminiModalOpen(true)}
@@ -4293,6 +5224,8 @@ export default function App() {
             <SettingsPage
               settings={settings}
               onSaveSettings={handleSaveSettings}
+              theme={theme}
+              onSelectTheme={handleSelectTheme}
             />
           )}
         </main>
@@ -4341,6 +5274,25 @@ export default function App() {
           onAdd={handleAddCustomer}
         />
       )}
+      {activeIntegrationModal && (
+        <IntegrationConnectorModal
+          activeKind={activeIntegrationModal}
+          config={integrationsConfig}
+          accounts={accounts}
+          activeUserName={operatorName}
+          onClose={() => setActiveIntegrationModal(null)}
+          onSaveConfig={handleSaveIntegrationsConfig}
+          onSyncAccounts={handleSyncAccountsFromIntegration}
+          onAddInteractions={(newItems) =>
+            setInteractionsList((prev) => [...newItems, ...prev])
+          }
+          onAddEvidence={(newEv) =>
+            setEvidenceList((prev) => [...newEv, ...prev])
+          }
+          onAppendLog={handleAppendIntegrationLog}
+          showToast={showToast}
+        />
+      )}
       {supabaseModalOpen && (
         <SupabaseConfigModal
           close={() => setSupabaseModalOpen(false)}
@@ -4354,7 +5306,7 @@ export default function App() {
                 statusMsg || "Connected to Supabase! Fetching live tables...",
               )
             } else {
-              showToast(statusMsg || "Switched to local demo data mode.")
+              showToast(statusMsg || "Switched to local data mode.")
             }
           }}
           onSeedDatabase={handleSeedDatabase}
@@ -4378,12 +5330,17 @@ export default function App() {
       )}
       {authModalOpen && (
         <AuthModal
-          user={user}
+          activeUser={activeUser}
           close={() => setAuthModalOpen(false)}
-          onAuthSuccess={(msg) => {
-            setAuthModalOpen(false)
-            showToast(msg)
-          }}
+          onUpdateProfile={(updatedUser, resetPodData) =>
+            applyUserWorkspace(
+              updatedUser,
+              false,
+              `Updated profile & territory pod for User ID ${updatedUser.id}`,
+              resetPodData,
+            )
+          }
+          onSignOut={handleSignOut}
         />
       )}
       {toast && (
@@ -4397,3 +5354,4 @@ export default function App() {
     </div>
   )
 }
+

@@ -6,6 +6,7 @@
 
 html {
   scroll-behavior: smooth;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 body {
@@ -13,6 +14,19 @@ body {
   min-width: 320px;
   background: var(--color-slate-50);
   font-family: var(--font-sans);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+html[data-theme="dark"] body {
+  background: #020617;
+  color: #f1f5f9;
+  color-scheme: dark;
+}
+
+html[data-theme="light"] body {
+  background: #f8fafc;
+  color: #0f172a;
+  color-scheme: light;
 }
 
 button,
@@ -33,4 +47,304 @@ button:disabled {
 ::selection {
   background: var(--color-emerald-100);
   color: var(--color-emerald-950);
+}
+
+html[data-theme="dark"] ::selection {
+  background: #10b981;
+  color: #020617;
+}
+
+/* ============================================================================
+   1. DARK THEME OVERRIDES FOR DASHBOARD & MODALS (.dealflow-dashboard)
+   ============================================================================ */
+html[data-theme="dark"] .dealflow-dashboard {
+  background-color: #020617 !important;
+  color: #f1f5f9 !important;
+}
+
+/* Surfaces & Cards */
+html[data-theme="dark"] .dealflow-dashboard .bg-white {
+  background-color: #0f172a !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .bg-white\/95 {
+  background-color: rgba(15, 23, 42, 0.92) !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .bg-slate-50,
+html[data-theme="dark"] .dealflow-dashboard .bg-slate-50\/70,
+html[data-theme="dark"] .dealflow-dashboard .bg-slate-50\/60,
+html[data-theme="dark"] .dealflow-dashboard .bg-slate-50\/50 {
+  background-color: #1e293b !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .bg-slate-100 {
+  background-color: #1e293b !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .bg-slate-200 {
+  background-color: #334155 !important;
+}
+
+/* Hero & Banner Gradients in Dashboard */
+html[data-theme="dark"] .dealflow-dashboard .from-emerald-50 {
+  --tw-gradient-from: rgba(16, 185, 129, 0.14) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .via-white {
+  --tw-gradient-via: #0f172a !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .to-cyan-50 {
+  --tw-gradient-to: rgba(6, 182, 212, 0.14) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .bg-emerald-50\/40,
+html[data-theme="dark"] .dealflow-dashboard .bg-emerald-50\/30,
+html[data-theme="dark"] .dealflow-dashboard .bg-emerald-50\/50,
+html[data-theme="dark"] .dealflow-dashboard .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.14) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .bg-red-50,
+html[data-theme="dark"] .dealflow-dashboard .bg-red-50\/40 {
+  background-color: rgba(239, 68, 68, 0.14) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .bg-amber-50,
+html[data-theme="dark"] .dealflow-dashboard .bg-amber-50\/60,
+html[data-theme="dark"] .dealflow-dashboard .bg-amber-100 {
+  background-color: rgba(245, 158, 11, 0.16) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .bg-cyan-50 {
+  background-color: rgba(6, 182, 212, 0.14) !important;
+}
+
+/* Typography Hierarchy */
+html[data-theme="dark"] .dealflow-dashboard .text-slate-950,
+html[data-theme="dark"] .dealflow-dashboard .text-slate-900 {
+  color: #f8fafc !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .text-slate-800,
+html[data-theme="dark"] .dealflow-dashboard .text-slate-700 {
+  color: #e2e8f0 !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .text-slate-500,
+html[data-theme="dark"] .dealflow-dashboard .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+/* Accent Text Colors in Dark Dashboard */
+html[data-theme="dark"] .dealflow-dashboard .text-emerald-950,
+html[data-theme="dark"] .dealflow-dashboard .text-emerald-900,
+html[data-theme="dark"] .dealflow-dashboard .text-emerald-800,
+html[data-theme="dark"] .dealflow-dashboard .text-emerald-700 {
+  color: #6ee7b7 !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .text-red-900,
+html[data-theme="dark"] .dealflow-dashboard .text-red-800,
+html[data-theme="dark"] .dealflow-dashboard .text-red-700,
+html[data-theme="dark"] .dealflow-dashboard .text-red-600 {
+  color: #fca5a5 !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .text-amber-900,
+html[data-theme="dark"] .dealflow-dashboard .text-amber-800,
+html[data-theme="dark"] .dealflow-dashboard .text-amber-700,
+html[data-theme="dark"] .dealflow-dashboard .text-amber-600 {
+  color: #fcd34d !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .text-cyan-900,
+html[data-theme="dark"] .dealflow-dashboard .text-cyan-800,
+html[data-theme="dark"] .dealflow-dashboard .text-cyan-700,
+html[data-theme="dark"] .dealflow-dashboard .text-cyan-600 {
+  color: #67e8f9 !important;
+}
+
+/* Borders & Dividers */
+html[data-theme="dark"] .dealflow-dashboard .border-slate-200,
+html[data-theme="dark"] .dealflow-dashboard .border-slate-100,
+html[data-theme="dark"] .dealflow-dashboard .border-slate-300 {
+  border-color: #1e293b !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .border-emerald-200,
+html[data-theme="dark"] .dealflow-dashboard .border-emerald-100,
+html[data-theme="dark"] .dealflow-dashboard .border-emerald-300 {
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .border-red-200 {
+  border-color: rgba(239, 68, 68, 0.35) !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .border-amber-200 {
+  border-color: rgba(245, 158, 11, 0.35) !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .border-cyan-200 {
+  border-color: rgba(6, 182, 212, 0.35) !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .divide-slate-100 > :not(:last-child),
+html[data-theme="dark"] .dealflow-dashboard .divide-slate-200 > :not(:last-child) {
+  border-color: #1e293b !important;
+}
+
+/* Rings */
+html[data-theme="dark"] .dealflow-dashboard .ring-slate-200 {
+  --tw-ring-color: #334155 !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .ring-emerald-200 {
+  --tw-ring-color: rgba(16, 185, 129, 0.4) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .ring-red-200 {
+  --tw-ring-color: rgba(239, 68, 68, 0.4) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .ring-amber-200 {
+  --tw-ring-color: rgba(245, 158, 11, 0.4) !important;
+}
+html[data-theme="dark"] .dealflow-dashboard .ring-cyan-200 {
+  --tw-ring-color: rgba(6, 182, 212, 0.4) !important;
+}
+
+/* Inputs, Selects, Textareas in Dark Dashboard */
+html[data-theme="dark"] .dealflow-dashboard input,
+html[data-theme="dark"] .dealflow-dashboard select,
+html[data-theme="dark"] .dealflow-dashboard textarea {
+  background-color: #020617 !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard input::placeholder,
+html[data-theme="dark"] .dealflow-dashboard textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Primary Buttons & Hovers in Dark Dashboard */
+html[data-theme="dark"] .dealflow-dashboard button.bg-slate-900 {
+  background-color: #10b981 !important;
+  color: #020617 !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard button.bg-slate-900:hover {
+  background-color: #34d399 !important;
+}
+
+html[data-theme="dark"] .dealflow-dashboard .hover\:bg-slate-50:hover,
+html[data-theme="dark"] .dealflow-dashboard .hover\:bg-slate-100:hover,
+html[data-theme="dark"] .dealflow-dashboard tr.hover\:bg-slate-50:hover {
+  background-color: rgba(30, 41, 59, 0.75) !important;
+}
+
+/* ============================================================================
+   2. WHITE (LIGHT) THEME OVERRIDES FOR FRONT PAGE & LOGIN (.dealflow-portal)
+   ============================================================================ */
+html[data-theme="light"] .dealflow-portal {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* Portal Headers, Footers & Section Backgrounds */
+html[data-theme="light"] .dealflow-portal header.bg-slate-950\/90,
+html[data-theme="light"] .dealflow-portal footer.bg-slate-950 {
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  border-color: #e2e8f0 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .bg-slate-900,
+html[data-theme="light"] .dealflow-portal .bg-slate-900\/95,
+html[data-theme="light"] .dealflow-portal .bg-slate-900\/90,
+html[data-theme="light"] .dealflow-portal .bg-slate-900\/80,
+html[data-theme="light"] .dealflow-portal .bg-slate-900\/70,
+html[data-theme="light"] .dealflow-portal .bg-slate-900\/60 {
+  background-color: #ffffff !important;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06) !important;
+}
+
+html[data-theme="light"] .dealflow-portal .bg-slate-900\/30 {
+  background-color: #f1f5f9 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .bg-slate-950,
+html[data-theme="light"] .dealflow-portal .bg-slate-950\/80,
+html[data-theme="light"] .dealflow-portal .bg-slate-950\/70,
+html[data-theme="light"] .dealflow-portal .bg-slate-950\/60 {
+  background-color: #f1f5f9 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .bg-slate-800 {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* Portal Borders & Dividers */
+html[data-theme="light"] .dealflow-portal .border-slate-800,
+html[data-theme="light"] .dealflow-portal .border-slate-800\/80,
+html[data-theme="light"] .dealflow-portal .border-slate-700 {
+  border-color: #cbd5e1 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .divide-slate-800\/80 > :not(:last-child) {
+  border-color: #e2e8f0 !important;
+}
+
+/* Portal Typography */
+html[data-theme="light"] .dealflow-portal .text-white,
+html[data-theme="light"] .dealflow-portal .text-slate-100,
+html[data-theme="light"] .dealflow-portal .text-slate-200 {
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .dealflow-portal .text-slate-300 {
+  color: #334155 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .text-slate-400 {
+  color: #475569 !important;
+}
+
+/* Portal Accent Text Adjustments for Crisp Light Contrast */
+html[data-theme="light"] .dealflow-portal .text-emerald-300,
+html[data-theme="light"] .dealflow-portal .text-emerald-400 {
+  color: #047857 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .text-cyan-300,
+html[data-theme="light"] .dealflow-portal .text-cyan-400 {
+  color: #0e7490 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .text-amber-300,
+html[data-theme="light"] .dealflow-portal .text-amber-400 {
+  color: #b45309 !important;
+}
+
+html[data-theme="light"] .dealflow-portal .text-red-200,
+html[data-theme="light"] .dealflow-portal .text-red-300 {
+  color: #b91c1c !important;
+}
+
+/* Keep Hero Gradient Text Vibrant in Light Mode */
+html[data-theme="light"] .dealflow-portal .bg-clip-text.text-transparent {
+  color: transparent !important;
+  background-image: linear-gradient(to right, #059669, #0891b2) !important;
+}
+
+/* Portal Inputs & Selects in Light Mode */
+html[data-theme="light"] .dealflow-portal input,
+html[data-theme="light"] .dealflow-portal select,
+html[data-theme="light"] .dealflow-portal textarea {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+html[data-theme="light"] .dealflow-portal input::placeholder,
+html[data-theme="light"] .dealflow-portal textarea::placeholder {
+  color: #94a3b8 !important;
 }

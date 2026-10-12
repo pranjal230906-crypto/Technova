@@ -12,9 +12,14 @@ create table if not exists public.profiles (
   email text,
   full_name text not null default 'RevOps Operator',
   role text not null default 'RevOps Admin',
+  department text not null default 'Enterprise Renewals',
+  portfolio_label text not null default 'Enterprise Renewal & Retention Pod',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.profiles add column if not exists department text not null default 'Enterprise Renewals';
+alter table public.profiles add column if not exists portfolio_label text not null default 'Enterprise Renewal & Retention Pod';
 
 -- Automatically create a profile row when a new user signs up via Supabase Auth
 create or replace function public.handle_new_user()
@@ -23,17 +28,22 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email, full_name, role)
+  insert into public.profiles (id, email, full_name, role, department, portfolio_label)
   values (
     new.id,
     new.email,
     coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), 'RevOps Operator'),
-    coalesce(new.raw_user_meta_data->>'role', 'RevOps Admin')
+    coalesce(new.raw_user_meta_data->>'role', 'RevOps Admin'),
+    coalesce(new.raw_user_meta_data->>'department', 'Enterprise Renewals'),
+    coalesce(new.raw_user_meta_data->>'portfolio_label', 'Enterprise Renewal & Retention Pod')
   )
   on conflict (id) do update
   set
     email = excluded.email,
     full_name = coalesce(excluded.full_name, public.profiles.full_name),
+    role = coalesce(excluded.role, public.profiles.role),
+    department = coalesce(excluded.department, public.profiles.department),
+    portfolio_label = coalesce(excluded.portfolio_label, public.profiles.portfolio_label),
     updated_at = now();
   return new;
 end;
@@ -323,3 +333,103 @@ on conflict (name) do nothing;
 insert into public.workspace_settings (id, workspace_name, timezone, primary_crm, default_task_owner, require_human_approval, record_evidence_refs, notify_account_owners)
 values (1, 'Revenue Operations', 'Pacific Time (PT)', 'Salesforce', 'Account owner', true, true, true)
 on conflict (id) do nothing;
+
+
+-- ============================================================================
+-- 9. MCP INTEGRATION TABLES & SECURITY EXTENSIONS
+-- ============================================================================
+alter table public.accounts add column if not exists external_crm_id text;
+alter table public.accounts add column if not exists email_domain text;
+alter table public.accounts add column if not exists workspace_id text not null default 'ws_default';
+
+alter table public.approvals add column if not exists intended_operation text not null default 'create_followup_task';
+alter table public.approvals add column if not exists payload_hash text;
+alter table public.approvals add column if not exists idempotency_key text;
+alter table public.approvals add column if not exists creator_user_id text;
+alter table public.approvals add column if not exists approved_at timestamptz;
+alter table public.approvals add column if not exists executed_at timestamptz;
+alter table public.approvals add column if not exists execution_result text;
+
+create unique index if not exists idx_approvals_idempotency_key
+  on public.approvals (idempotency_key)
+  where idempotency_key is not null;
+
+create table if not exists public.mcp_connections (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id text not null default 'ws_default',
+  user_id text not null default 'usr_maya_chen',
+  integration_key text not null check (integration_key in ('crm', 'email', 'calendar', 'usage', 'dealflow_mcp')),
+  provider text not null,
+  server_url text,
+  auth_type text not null default 'oauth2' check (auth_type in ('oauth2', 'api_key', 'mcp_remote', 'internal')),
+  status text not null default 'Not configured' check (
+    status in ('Not configured', 'Connecting', 'Connected', 'Syncing', 'Disconnected', 'Error')
+  ),
+  encrypted_access_token text,
+  encrypted_refresh_token text,
+  token_expires_at timestamptz,
+  scopes text[] not null default '{}',
+  external_account_id text,
+  sync_cursor text,
+  last_synced_at timestamptz,
+  last_test_at timestamptz,
+  last_error text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (workspace_id, user_id, integration_key)
+);
+
+create table if not exists public.mcp_tool_invocations (
+  id uuid primary key default gen_random_uuid(),
+  request_id text not null,
+  workspace_id text not null default 'ws_default',
+  user_id text not null,
+  server_id text not null,
+  tool_name text not null,
+  redacted_arguments jsonb not null default '{}'::jsonb,
+  status text not null check (status in ('success', 'error', 'denied', 'timeout')),
+  duration_ms int not null default 0,
+  error_message text,
+  result_summary text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.product_events (
+  id uuid primary key default gen_random_uuid(),
+  event_id text not null unique,
+  idempotency_key text not null unique,
+  workspace_id text not null default 'ws_default',
+  account_name text not null,
+  event_type text not null check (
+    event_type in ('user_login', 'session_started', 'feature_used', 'subscription_activity')
+  ),
+  actor_email text,
+  feature_name text,
+  active_seats int,
+  contracted_seats int,
+  usage_delta_pct numeric,
+  metadata jsonb not null default '{}'::jsonb,
+  occurred_at timestamptz not null default now(),
+  ingested_at timestamptz not null default now()
+);
+
+create table if not exists public.ai_insights (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id text not null default 'ws_default',
+  user_id text not null,
+  account_name text not null,
+  risk_level text not null,
+  confidence_score numeric not null default 0.85,
+  summary text not null,
+  why_it_matters text not null,
+  suggested_next_step text not null,
+  evidence_refs text[] not null default '{}',
+  tool_calls_used text[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+alter table public.mcp_connections enable row level security;
+alter table public.mcp_tool_invocations enable row level security;
+alter table public.product_events enable row level security;
+alter table public.ai_insights enable row level security;

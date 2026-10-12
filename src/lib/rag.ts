@@ -5,7 +5,7 @@ import type {
   EvidenceRecord,
   InteractionRecord,
   RiskOpportunityRecord,
-} from "./supabase"
+} from "./supabase.ts"
 
 export type RagCategory =
   | "evidence"
